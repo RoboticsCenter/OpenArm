@@ -17,11 +17,15 @@ the terminal, re-calibrating, recovering from faults, and so on).
 ## 1. What this is and how it's wired
 
 The motors talk the DaMiao **MIT CAN protocol**. Your computer talks to them
-through a **DM-USB2FDCAN** USB-to-CAN adapter:
+through a **DM-USB2FDCAN** USB-to-CAN adapter. When plugged in, it shows up in
+`lsusb` looking like this:
 
 ```
 Bus 003 Device 005: ID 34b7:6632 DaMiao-Tech DM-USB2FDCAN
 ```
+
+The `Bus`/`Device` numbers will be different on your machine — that's fine. The
+part that matters is the USB ID **`34b7:6632`** and the `DM-USB2FDCAN` name.
 
 - The adapter runs in **USB mode**: the real control data flows over a
   vendor-specific bulk USB interface. (There is also a `/dev/ttyACM0` debug
