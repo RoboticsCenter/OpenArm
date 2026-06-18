@@ -1,0 +1,1584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Motor Control</title>
+<style>
+  :root{
+    --bg:#0c0f17; --panel:#151a26; --panel2:#1c2333; --line:#283145;
+    --txt:#e7ecf5; --muted:#8b97ad; --accent:#4f8cff; --good:#37d399;
+    --warn:#ffb454; --bad:#ff5d6c; --shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       background:radial-gradient(1200px 600px at 70% -10%,#16213a 0%,var(--bg) 55%);color:var(--txt);min-height:100vh}
+  header{display:flex;align-items:center;justify-content:space-between;padding:16px 26px;border-bottom:1px solid var(--line);
+         position:sticky;top:0;background:rgba(12,15,23,.85);backdrop-filter:blur(8px);z-index:10}
+  header h1{font-size:18px;margin:0;font-weight:650;letter-spacing:.3px}
+  header h1 span{color:var(--accent)}
+  .hdr-actions{display:flex;gap:12px;align-items:center}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);
+        background:var(--panel);border:1px solid var(--line);padding:6px 12px;border-radius:999px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--bad);box-shadow:0 0 8px var(--bad)}
+  .dot.on{background:var(--good);box-shadow:0 0 10px var(--good)}
+  .dot.warn{background:var(--warn);box-shadow:0 0 10px var(--warn)}
+  .wrap{padding:22px;max-width:1500px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--shadow)}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:0 0 14px}
+  label{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
+  select,input[type=number],input[type=text]{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+        padding:9px 11px;border-radius:9px;font-size:14px;outline:none}
+  select:focus,input:focus{border-color:var(--accent)}
+  .row{display:flex;gap:10px}
+  .row>*{flex:1}
+  button{cursor:pointer;border:none;border-radius:10px;font-size:14px;font-weight:600;padding:11px 14px;
+          color:#fff;background:var(--panel2);border:1px solid var(--line);transition:.15s}
+  button:hover{filter:brightness(1.15)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .btn-accent{background:var(--accent);border-color:transparent}
+  .btn-good{background:var(--good);border-color:transparent;color:#04261a}
+  .btn-ghost{background:transparent}
+  .btn-estop{background:var(--bad);border-color:transparent;font-size:14px;padding:10px 18px}
+  /* "engaged" = the state this button represents is currently active */
+  button.engaged{filter:brightness(.78);box-shadow:inset 0 0 0 2px rgba(255,255,255,.35)}
+  button.engaged:disabled{opacity:1;cursor:default}
+  .btn-lg{font-size:16px;padding:15px 26px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .telem{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .metric{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:11px}
+  .metric .k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .metric .v{font-size:21px;font-weight:680;margin-top:5px;font-variant-numeric:tabular-nums}
+  .metric .u{font-size:11px;color:var(--muted);margin-left:3px;font-weight:400}
+  canvas{width:100%;height:130px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;margin-top:12px}
+  .seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px}
+  .seg button{border:none;border-radius:0;background:transparent;color:var(--muted);font-weight:600;flex:1;padding:9px 4px;font-size:13px}
+  .seg button.active{background:var(--accent);color:#fff}
+  .sliderval{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);align-items:center}
+  input[type=range]{width:100%;accent-color:var(--accent);margin:6px 0 2px}
+  .muted{color:var(--muted);font-size:12px}
+  .hide{display:none!important}
+  .statusline{font-size:12px;color:var(--muted);margin-top:8px;min-height:16px}
+  .fault{color:var(--bad)}
+  .badge{font-size:11px;padding:3px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);color:var(--muted)}
+  .motorgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:20px}
+  .mhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:10px}
+  .mhead .title{font-size:16px;font-weight:700}
+  .mhead .title small{color:var(--muted);font-weight:500;font-size:12px;margin-left:6px}
+  .powerbar{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
+  .powerbar3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:10px 0}
+  .switch{position:relative;width:54px;height:28px;flex:0 0 auto}
+  .empty{text-align:center;color:var(--muted);padding:50px 20px}
+  .num-inline{width:84px;text-align:center;padding:6px 8px}
+  .advanced-settings{margin-top:14px;border:1px solid var(--line);border-radius:12px;background:rgba(28,35,51,.55);overflow:hidden}
+  .advanced-settings>summary{cursor:pointer;list-style:none;padding:11px 13px;font-size:13px;font-weight:700;color:var(--txt);
+        display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .advanced-settings>summary::-webkit-details-marker{display:none}
+  .advanced-settings>summary:after{content:"\25B8";color:var(--muted);transition:.15s}
+  .advanced-settings[open]>summary:after{transform:rotate(90deg)}
+  .advanced-settings .advanced-body{border-top:1px solid var(--line);padding:0 13px 13px}
+
+  /* ---- wizard stepper ---- */
+  .stepper{display:flex;align-items:center;gap:0;list-style:none;margin:0;padding:0;justify-content:center;flex-wrap:wrap}
+  .stepper li{display:flex;align-items:center;gap:0}
+  .step-btn{display:flex;align-items:center;gap:10px;background:transparent;border:none;padding:8px 4px;color:var(--muted);font-weight:600}
+  .step-btn:hover:not(:disabled){filter:none;color:var(--txt)}
+  .step-num{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+            background:var(--panel2);border:1px solid var(--line);font-size:14px;color:var(--muted);flex:0 0 auto;transition:.15s}
+  .step-btn.active .step-num{background:var(--accent);border-color:transparent;color:#fff;box-shadow:0 0 0 4px rgba(79,140,255,.15)}
+  .step-btn.done .step-num{background:var(--good);border-color:transparent;color:#04261a}
+  .step-btn.active{color:var(--txt)}
+  .step-line{width:46px;height:2px;background:var(--line);margin:0 6px}
+  .step-line.done{background:var(--good)}
+  .step-label{font-size:14px}
+
+  .step-head{margin:0 0 6px;font-size:22px;font-weight:700}
+  .step-sub{color:var(--muted);font-size:14px;margin:0 0 20px;max-width:620px}
+  .nav-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:8px}
+  .nav-footer .spacer{flex:1}
+
+  .banner{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:12px;font-size:14px;margin-bottom:16px}
+  .banner-good{background:rgba(55,211,153,.10);border:1px solid rgba(55,211,153,.35);color:var(--good)}
+  .banner-warn{background:rgba(255,180,84,.10);border:1px solid rgba(255,180,84,.35);color:var(--warn)}
+  .banner b{color:var(--txt)}
+
+  /* ---- discovery / list rows ---- */
+  .mlist{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+  .mrow{display:flex;align-items:center;gap:14px;background:var(--panel2);border:1px solid var(--line);
+        border-radius:12px;padding:12px 14px}
+  .mrow .avatar{width:42px;height:42px;border-radius:11px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+        font-weight:800;font-size:15px;background:linear-gradient(160deg,#243154,#1a2236);border:1px solid var(--line);color:var(--accent)}
+  .mrow .body{flex:1;min-width:0}
+  .name-input{font-size:15px;font-weight:700;color:var(--txt);background:transparent;border:1px solid transparent;
+        border-radius:7px;padding:4px 7px;width:100%;max-width:280px}
+  .name-input:hover{border-color:var(--line)}
+  .name-input:focus{border-color:var(--accent);background:var(--panel)}
+  .mrow .sub{font-size:12px;color:var(--muted);margin-top:2px;padding-left:7px}
+  .mrow .right{display:flex;align-items:center;gap:10px;flex:0 0 auto}
+  .statetag{font-size:12px;font-weight:700;padding:5px 10px;border-radius:8px;border:1px solid var(--line);white-space:nowrap}
+  .statetag.ok{color:var(--good);border-color:rgba(55,211,153,.4);background:rgba(55,211,153,.08)}
+  .statetag.todo{color:var(--warn);border-color:rgba(255,180,84,.4);background:rgba(255,180,84,.08)}
+  .statetag.busy{color:var(--accent);border-color:rgba(79,140,255,.4);background:rgba(79,140,255,.08)}
+  .rowbtn{padding:8px 14px;font-size:13px;width:auto}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid currentColor;border-right-color:transparent;
+        border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .center-cta{display:flex;flex-direction:column;align-items:center;gap:14px;padding:24px 0 8px;text-align:center}
+
+  /* ---- guided tutorial (spotlight) ---- */
+  .tut{position:fixed;inset:0;z-index:2000}
+  .tut-spot{position:fixed;border-radius:12px;pointer-events:none;transition:all .28s cubic-bezier(.4,0,.2,1);
+        box-shadow:0 0 0 9999px rgba(8,11,18,.80), 0 0 0 3px var(--accent), 0 0 22px 4px rgba(79,140,255,.55)}
+  .tut-card{position:fixed;max-width:330px;background:var(--panel);border:1px solid var(--line);border-radius:14px;
+        padding:16px 18px;box-shadow:var(--shadow);z-index:2001;transition:top .2s ease,left .2s ease}
+  .tut-card h4{margin:8px 0 8px;font-size:17px}
+  .tut-card p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.55}
+  .tut-stepnum{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);font-weight:700}
+  .tut-actions{display:flex;gap:10px;margin-top:16px;justify-content:flex-end;align-items:center}
+  .tut-actions button{padding:8px 16px;width:auto;font-size:13px}
+  .tut-hint{position:fixed;left:0;right:0;bottom:18px;text-align:center;color:var(--muted);font-size:12px;z-index:2001;pointer-events:none}
+  .tut-skip{position:fixed;top:16px;right:18px;z-index:2002;background:rgba(20,26,38,.92);border:1px solid var(--line);
+        color:var(--txt);padding:9px 15px;border-radius:10px;font-size:13px;width:auto;font-weight:600}
+
+  /* ---- arm selection ---- */
+  .arm-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:640px){.arm-grid{grid-template-columns:1fr}}
+  .arm-opt{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:28px 20px;
+        background:var(--panel2);border:1px solid var(--line);border-radius:16px;color:var(--txt);transition:.15s}
+  .arm-opt:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .arm-emoji{font-size:42px;line-height:1}
+  .arm-name{font-size:19px;font-weight:800}
+  .arm-desc{font-size:13px;color:var(--muted);font-weight:500;line-height:1.5;max-width:260px}
+
+  /* ---- manual calibration ---- */
+  .mark-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+  .mark-box{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center}
+  .mark-box.marked{border-color:var(--good);background:rgba(55,211,153,.08)}
+  .mark-title{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700}
+  .mark-val{font-size:18px;font-weight:700;margin:8px 0 12px;font-variant-numeric:tabular-nums}
+  .mark-box.marked .mark-val{color:var(--good)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Motor <span>Control</span></h1>
+  <div class="hdr-actions">
+    <button id="armPill" class="pill" style="cursor:pointer" title="Change arm type"><span id="armIcon">&#129482;</span><span id="armName">choose arm</span></button>
+    <span class="pill"><span id="busDot" class="dot"></span><span id="busTxt">no motors</span></span>
+    <button id="btnEstopAll" class="btn-estop">&#9632; E-STOP ALL</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- Arm selection (shown first) -->
+  <section id="armSelect" class="hide">
+    <div class="card" style="max-width:780px;margin:24px auto">
+      <h3 class="step-head" style="text-align:center">Which arm do you have?</h3>
+      <p class="step-sub" style="text-align:center;margin:0 auto 24px">Choose your hardware so we set up the right calibration workflow. You can change this anytime from the top bar.</p>
+      <div class="arm-grid">
+        <button class="arm-opt" data-arm="openarm">
+          <div class="arm-emoji">&#129482;</div>
+          <div class="arm-name">OpenArm</div>
+          <div class="arm-desc">Automatic hardstop calibration &mdash; one button finds each joint's range and sets zero.</div>
+        </button>
+        <button class="arm-opt" data-arm="aloha">
+          <div class="arm-emoji">&#129302;</div>
+          <div class="arm-name">Aloha</div>
+          <div class="arm-desc">Manual calibration &mdash; drive each joint to its hardstops, mark them, and it zeroes for you.</div>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <div id="wizard">
+  <!-- Progress stepper -->
+  <ol class="stepper" id="stepper">
+    <li>
+      <button class="step-btn" data-step="connect">
+        <span class="step-num">1</span><span class="step-label">Connect</span>
+      </button>
+    </li>
+    <li><span class="step-line" data-line="1"></span></li>
+    <li>
+      <button class="step-btn" data-step="calibrate">
+        <span class="step-num">2</span><span class="step-label">Calibrate</span>
+      </button>
+    </li>
+    <li><span class="step-line" data-line="2"></span></li>
+    <li>
+      <button class="step-btn" data-step="control">
+        <span class="step-num">3</span><span class="step-label">Control</span>
+      </button>
+    </li>
+  </ol>
+
+  <!-- ============ STEP 1: CONNECT ============ -->
+  <section id="step-connect" class="step">
+    <div class="card">
+      <h3 class="step-head">Connect your motors</h3>
+      <p class="step-sub">Scan the bus to find every motor that's powered on and wired up.
+        Give each one a friendly name, then connect them all with one click.</p>
+
+      <div class="center-cta" id="scanCta">
+        <button id="btnScan" class="btn-accent btn-lg">Scan for Motors</button>
+        <div id="scanOut" class="statusline" style="text-align:center"></div>
+      </div>
+
+      <div id="scanResult" class="mlist"></div>
+
+      <div id="connectAllWrap" class="hide" style="margin-top:18px;display:flex;gap:12px;justify-content:flex-end">
+        <button id="btnRescan" class="btn-ghost" style="width:auto">Re-scan</button>
+        <button id="btnConnectAll" class="btn-good" style="width:auto">Connect All Motors</button>
+      </div>
+
+      <details class="advanced-settings">
+        <summary>Advanced <span class="muted">add a motor manually by CAN id</span></summary>
+        <div class="advanced-body">
+          <div class="row" style="gap:8px;align-items:flex-end;margin-top:12px">
+            <div style="flex:0 0 auto"><label style="margin:0 0 5px">CAN id</label>
+              <input id="manId" type="number" value="1" min="1" max="127" style="width:90px"></div>
+            <div style="flex:0 0 auto"><label style="margin:0 0 5px">Model</label>
+              <select id="manModel" style="width:150px">
+                {% for m in models %}<option value="{{m}}">{{m}}</option>{% endfor %}
+              </select></div>
+            <div style="flex:0 0 auto"><label style="margin:0 0 5px">Channel</label>
+              <input id="manChan" type="number" value="0" min="0" max="3" style="width:80px"></div>
+            <button id="btnAdd" class="btn-ghost" style="width:auto">Add</button>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="nav-footer">
+      <span class="spacer"></span>
+      <button id="toCalibrate" class="btn-accent" style="width:auto" disabled>Continue to Calibration &rarr;</button>
+    </div>
+  </section>
+
+  <!-- ============ STEP 2: CALIBRATE ============ -->
+  <section id="step-calibrate" class="step hide">
+    <div class="card">
+      <h3 class="step-head">Calibrate motors</h3>
+      <p class="step-sub" id="calSub">Calibration finds each joint's range of motion and sets its zero point.
+        It's required once before you can control the motors. Keep the area clear &mdash; the joints will
+        move on their own. You can hit <b>E-STOP</b> at any time.</p>
+
+      <div id="calBanner"></div>
+      <div id="calList" class="mlist"></div>
+
+      <div style="margin-top:18px;display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap">
+        <button id="btnRecalAll" class="btn-ghost hide" style="width:auto">Re-calibrate All</button>
+        <button id="btnCalAll" class="btn-accent" style="width:auto">Calibrate All Motors</button>
+      </div>
+      <div id="calCmd" class="statusline"></div>
+    </div>
+
+    <!-- Aloha manual calibration panel -->
+    <div id="manualPanel" class="card hide" style="border-color:var(--accent)">
+      <div class="mhead">
+        <div class="title">Manual calibration &mdash; <span id="mcName"></span></div>
+        <button id="mcClose" class="btn-ghost" style="width:auto">Close</button>
+      </div>
+      <p class="step-sub" style="margin:0 0 14px">Press <b>Enable to move</b>, then use the slider to drive the joint
+        all the way to one hardstop and mark it &mdash; then the other. When both stops are marked, hit
+        <b>Confirm &amp; Zero</b> and the joint centers itself and sets its zero automatically.</p>
+      <div class="telem" style="grid-template-columns:1fr">
+        <div class="metric"><div class="k">Live Position</div><div class="v"><span id="mcPos">0.000</span><span class="u">rad</span></div></div>
+      </div>
+      <div class="powerbar">
+        <button id="mcEnable" class="btn-good">Enable to move</button>
+        <button id="mcRelease">Release</button>
+      </div>
+      <label>Jog <span class="muted">(rad) &mdash; drive the joint to a hardstop</span></label>
+      <input type="range" id="mcJog" min="-12.5" max="12.5" step="0.01" value="0">
+      <div class="sliderval"><span id="mcJogMin">-12.5</span><span id="mcJogMax">12.5</span></div>
+      <div class="mark-grid">
+        <div class="mark-box" id="mcRearBox">
+          <div class="mark-title">Rear stop</div>
+          <div class="mark-val" id="mcRearVal">not marked</div>
+          <button id="mcMarkRear" class="btn-accent" style="width:100%">Mark Rear Stop</button>
+        </div>
+        <div class="mark-box" id="mcFrontBox">
+          <div class="mark-title">Front stop</div>
+          <div class="mark-val" id="mcFrontVal">not marked</div>
+          <button id="mcMarkFront" class="btn-accent" style="width:100%">Mark Front Stop</button>
+        </div>
+      </div>
+      <button id="mcConfirm" class="btn-good" style="margin-top:14px;width:100%" disabled>Confirm &amp; Zero</button>
+      <div id="mcCmd" class="statusline"></div>
+    </div>
+
+    <div class="nav-footer">
+      <button id="backToConnect" class="btn-ghost" style="width:auto">&larr; Back</button>
+      <span class="spacer"></span>
+      <button id="skipCalibration" class="btn-ghost" style="width:auto">Skip for now</button>
+      <button id="toControl" class="btn-good" style="width:auto" disabled>Continue to Controls &rarr;</button>
+    </div>
+  </section>
+
+  <!-- ============ STEP 3: CONTROL ============ -->
+  <section id="step-control" class="step hide">
+    <!-- Arm selector: shown when two arms are connected -->
+    <div class="card hide" id="armTabsCard" style="padding:12px 18px">
+      <div class="seg" id="armTabs" style="max-width:420px;margin:0 auto"></div>
+      <p class="muted" style="text-align:center;margin:8px 0 0">Each arm has its own control panel below.</p>
+    </div>
+
+    <!-- View tabs: control both together or each individually -->
+    <div class="card" id="viewTabsCard" style="padding:12px 18px">
+      <div class="seg" id="viewTabs" style="max-width:420px;margin:0 auto">
+        <button data-view="group" class="active">&#9036; All Motors (Group)</button>
+        <button data-view="individual">&#9034; Individual</button>
+      </div>
+    </div>
+
+    <!-- Group / sync control -->
+    <div id="groupCard" class="card hide" style="border-color:var(--accent)">
+      <div class="mhead">
+        <div class="title">&#9036; Group Control<span id="grpTitleArm"></span> <small>one set of commands drives this arm's motors together</small></div>
+        <span class="pill"><span id="grpDot" class="dot"></span><span id="grpCount">0</span> motors</span>
+      </div>
+      <div class="powerbar">
+        <button id="grpEnable" class="btn-good">Enable All</button>
+        <button id="grpDisable">Disable All</button>
+      </div>
+      <div class="powerbar">
+        <button id="grpHome" class="btn-good">Return Home</button>
+        <button id="grpStop" class="btn-estop">&#9632; Stop All</button>
+      </div>
+
+      <div class="grpctl" data-for="pos">
+        <label>Target Position <span class="muted">(rad) &mdash; sent to all</span></label>
+        <input type="range" id="gPos" min="-12.5" max="12.5" step="0.01" value="0">
+        <div class="sliderval"><span class="gpos-min">-12.5</span>
+          <input type="number" id="gnPos" class="num-inline" value="0" step="0.05">
+          <span class="gpos-max">12.5</span></div>
+      </div>
+      <details class="advanced-settings">
+        <summary>Advanced <span class="muted">mode, velocity, gains, torque</span></summary>
+        <div class="advanced-body">
+          <label>Control Mode (all motors)</label>
+          <div class="seg" id="grpMode">
+            <button data-mode="mit" class="active">MIT</button>
+            <button data-mode="pos_vel">Position</button>
+            <button data-mode="force_pos">Force-Pos</button>
+          </div>
+          <div class="grpctl" data-for="vel">
+            <label>Velocity <span class="muted">(rad/s) &mdash; sent to all</span></label>
+            <input type="range" id="gVel" min="-20" max="20" step="0.05" value="0">
+            <div class="sliderval"><span>&minus;<span class="gvel-lim">20</span></span>
+              <input type="number" id="gnVel" class="num-inline" value="0" step="0.1">
+              <span><span class="gvel-lim">20</span></span></div>
+          </div>
+          <div class="grpctl" data-for="vlim">
+            <label>Velocity Limit <span class="muted">(rad/s)</span></label>
+            <input type="range" id="gVlim" min="0" max="20" step="0.05" value="2">
+            <div class="sliderval"><span>0</span>
+              <input type="number" id="gnVlim" class="num-inline" value="2" step="0.1">
+              <span><span class="gvel-lim">20</span></span></div>
+          </div>
+          <div class="grid2 grpctl" data-for="gains">
+            <div>
+              <label>Kp <span class="muted">(stiffness)</span></label>
+              <input type="range" id="gKp" min="0" max="200" step="0.5" value="20">
+              <div class="sliderval"><span>0</span><span id="gKpVal">20</span><span>200</span></div>
+            </div>
+            <div>
+              <label>Kd <span class="muted">(damping)</span></label>
+              <input type="range" id="gKd" min="0" max="5" step="0.05" value="4">
+              <div class="sliderval"><span>0</span><span id="gKdVal">4</span><span>5</span></div>
+            </div>
+          </div>
+          <div class="grpctl" data-for="tau">
+            <label>Feed-forward Torque <span class="muted">(Nm)</span></label>
+            <input type="range" id="gTau" min="-10" max="10" step="0.02" value="0">
+            <div class="sliderval"><span>&minus;<span class="gtau-lim">10</span></span><span id="gTauVal">0</span><span><span class="gtau-lim">10</span></span></div>
+          </div>
+          <div class="grpctl" data-for="ratio">
+            <label>Force Ratio <span class="muted">(0&ndash;1)</span></label>
+            <input type="range" id="gRatio" min="0" max="1" step="0.01" value="1">
+            <div class="sliderval"><span>0</span><span id="gRatioVal">1</span><span>1</span></div>
+          </div>
+        </div>
+      </details>
+      <p class="muted" id="grpHint" style="margin-top:12px"></p>
+      <div id="grpCmd" class="statusline"></div>
+    </div>
+
+    <!-- Per-motor cards -->
+    <div id="motors" class="motorgrid"></div>
+
+    <!-- Default gains preset -->
+    <details class="card advanced-settings" id="presetCard" style="padding:0">
+      <summary>Default stiffness &amp; damping <span class="muted">applied to every motor</span></summary>
+      <div class="advanced-body">
+        <div class="row" style="gap:14px;align-items:flex-end;margin-top:12px;flex-wrap:wrap">
+          <div style="flex:0 0 auto">
+            <label style="margin:0 0 5px">Stiffness &middot; Kp</label>
+            <input id="presetKp" type="number" value="20" min="0" max="500" step="0.5" style="width:120px">
+          </div>
+          <div style="flex:0 0 auto">
+            <label style="margin:0 0 5px">Damping &middot; Kd</label>
+            <input id="presetKd" type="number" value="4" min="0" max="5" step="0.05" style="width:120px">
+          </div>
+          <button id="presetApply" class="btn-accent" style="flex:0 0 auto;width:auto">Apply to All</button>
+          <button id="presetSave" class="btn-good" style="flex:0 0 auto;width:auto">Save as Default</button>
+          <span id="presetMsg" class="muted" style="flex:0 0 auto"></span>
+        </div>
+        <p class="muted" style="margin:10px 0 0">New motors start at the saved default
+          (currently <b>Kp <span id="presetCurKp">20</span></b> / <b>Kd <span id="presetCurKd">4</span></b>).</p>
+      </div>
+    </details>
+
+    <div class="nav-footer">
+      <button id="backToCalibrate" class="btn-ghost" style="width:auto">&larr; Back to Calibration</button>
+      <span class="spacer"></span>
+      <button id="btnReplayTut" class="btn-ghost" style="width:auto">&#9432; Show tutorial</button>
+      <button id="btnDownloadData" class="btn-ghost" style="width:auto">Download Motor Data</button>
+    </div>
+  </section>
+  </div>
+</div>
+
+<!-- Guided tutorial overlay -->
+<div id="tutorial" class="tut hide">
+  <div id="tutSpot" class="tut-spot"></div>
+  <div id="tutCard" class="tut-card">
+    <div class="tut-stepnum" id="tutStepNum"></div>
+    <h4 id="tutTitle"></h4>
+    <p id="tutBody"></p>
+    <div class="tut-actions">
+      <button id="tutPrev" class="btn-ghost">Back</button>
+      <button id="tutNext" class="btn-accent">Next</button>
+    </div>
+  </div>
+  <div class="tut-hint">Click anywhere to continue</div>
+  <button id="tutSkip" class="tut-skip">Skip tutorial &#10005;</button>
+</div>
+
+<!-- Template for one motor card -->
+<template id="motorTpl">
+<div class="card motor-card">
+  <div class="mhead">
+    <div class="title"><span class="m-name">Motor</span><small class="m-model"></small></div>
+    <span class="pill"><span class="m-dot dot"></span><span class="m-online">offline</span></span>
+  </div>
+
+  <div class="telem">
+    <div class="metric"><div class="k">Position</div><div class="v"><span class="m-pos">0.00</span><span class="u">rad</span></div></div>
+    <div class="metric"><div class="k">Velocity</div><div class="v"><span class="m-vel">0.00</span><span class="u">rad/s</span></div></div>
+    <div class="metric"><div class="k">Torque</div><div class="v"><span class="m-torq">0.00</span><span class="u">Nm</span></div></div>
+    <div class="metric"><div class="k">MOSFET T</div><div class="v"><span class="m-tmos">0</span><span class="u">&deg;C</span></div></div>
+    <div class="metric"><div class="k">Rotor T</div><div class="v"><span class="m-trot">0</span><span class="u">&deg;C</span></div></div>
+    <div class="metric"><div class="k">Status</div><div class="v"><span class="m-stat">&mdash;</span></div></div>
+  </div>
+  <canvas class="m-plot" width="800" height="130"></canvas>
+  <div class="sliderval" style="margin-top:8px"><span class="badge m-lim">limits &mdash;</span></div>
+
+  <div class="powerbar">
+    <button class="m-enable btn-good">Enable</button>
+    <button class="m-disable">Disable</button>
+  </div>
+
+  <div class="ctl" data-for="pos">
+    <label>Target Position <span class="muted">(rad)</span></label>
+    <input type="range" class="r-pos" min="-12.5" max="12.5" step="0.01" value="0">
+    <div class="sliderval"><span class="pos-min">-12.5</span>
+      <input type="number" class="n-pos num-inline" value="0" step="0.05">
+      <span class="pos-max">12.5</span></div>
+  </div>
+  <details class="advanced-settings">
+    <summary>Advanced <span class="muted">mode, velocity, gains, torque</span></summary>
+    <div class="advanced-body">
+      <label>Control Mode</label>
+      <div class="seg m-mode">
+        <button data-mode="mit" class="active">MIT</button>
+        <button data-mode="pos_vel">Position</button>
+        <button data-mode="force_pos">Force-Pos</button>
+      </div>
+      <div class="ctl" data-for="vel">
+        <label>Velocity <span class="muted">(rad/s)</span></label>
+        <input type="range" class="r-vel" min="-30" max="30" step="0.05" value="0">
+        <div class="sliderval"><span>&minus;<span class="vel-lim">30</span></span>
+          <input type="number" class="n-vel num-inline" value="0" step="0.1">
+          <span><span class="vel-lim">30</span></span></div>
+      </div>
+
+      <div class="ctl" data-for="vlim">
+        <label>Velocity Limit <span class="muted">(rad/s)</span></label>
+        <input type="range" class="r-vlim" min="0" max="30" step="0.05" value="2">
+        <div class="sliderval"><span>0</span>
+          <input type="number" class="n-vlim num-inline" value="2" step="0.1">
+          <span><span class="vel-lim">30</span></span></div>
+      </div>
+
+      <div class="grid2 ctl" data-for="gains">
+        <div>
+          <label>Kp <span class="muted">(stiffness)</span></label>
+          <input type="range" class="r-kp" min="0" max="200" step="0.5" value="20">
+          <div class="sliderval"><span>0</span><span class="kp-val">20</span><span>200</span></div>
+        </div>
+        <div>
+          <label>Kd <span class="muted">(damping)</span></label>
+          <input type="range" class="r-kd" min="0" max="5" step="0.05" value="4">
+          <div class="sliderval"><span>0</span><span class="kd-val">4</span><span>5</span></div>
+        </div>
+      </div>
+
+      <div class="ctl" data-for="tau">
+        <label>Feed-forward Torque <span class="muted">(Nm)</span></label>
+        <input type="range" class="r-tau" min="-10" max="10" step="0.02" value="0">
+        <div class="sliderval"><span>&minus;<span class="tau-lim">10</span></span><span class="tau-val">0</span><span><span class="tau-lim">10</span></span></div>
+      </div>
+
+      <div class="ctl" data-for="ratio">
+        <label>Force Ratio <span class="muted">(0&ndash;1)</span></label>
+        <input type="range" class="r-ratio" min="0" max="1" step="0.01" value="1">
+        <div class="sliderval"><span>0</span><span class="ratio-val">1</span><span>1</span></div>
+      </div>
+      <button class="m-remove btn-ghost" style="margin-top:14px;width:100%">Disconnect this motor</button>
+    </div>
+  </details>
+
+  <p class="muted m-hint" style="margin-top:12px"></p>
+  <div class="m-cmd statusline"></div>
+</div>
+</template>
+
+<script>
+async function post(url, body){
+  const r = await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body||{})});
+  let data = {};
+  try{ data = await r.json(); }
+  catch(e){ return {ok:false,error:`${r.status} ${r.statusText}`}; }
+  if(!r.ok && data.ok !== false){ data.ok=false; data.error=data.error || `${r.status} ${r.statusText}`; }
+  return data;
+}
+function flash(el,msg,bad){ if(!el)return; el.textContent=msg;
+  el.className=(el.className.replace(/\bfault\b/,'').trim())+(bad?" fault":""); }
+
+// ---- two-arm helpers ------------------------------------------------------
+// A robot can have two arms wired to one dual CAN adapter -- one arm per
+// channel ("0" and "1"). Motors share overlapping joint ids across arms, so
+// everything below is keyed by a composite uid = `${channel}:${motor_id}`.
+function uid(channel, motorId){ return String(channel)+":"+motorId; }
+function uidOf(m){ return uid(m.channel!=null?m.channel:"0", m.motor_id); }
+function splitUid(u){ const i=String(u).indexOf(":");
+  return i<0 ? {channel:"0", motor_id:parseInt(u)}
+             : {channel:String(u).slice(0,i), motor_id:parseInt(String(u).slice(i+1))}; }
+function armLabel(channel){
+  const c=String(channel);
+  return c==="1" ? "Arm 2" : c==="0" ? "Arm 1" : ("Arm "+c);
+}
+function channelsPresent(){
+  const s=new Set(Object.values(motorsByUid).map(m=>String(m.channel!=null?m.channel:"0")));
+  return [...s].sort();
+}
+function twoArms(){ return channelsPresent().length>1; }
+
+// ---- friendly names (stored locally per motor uid) ----
+const NAMES_KEY="motor.names";
+let names={};
+try{ names=JSON.parse(localStorage.getItem(NAMES_KEY))||{}; }catch(_){ names={}; }
+function motorName(u){
+  const n=names[u]; if(n&&String(n).trim()) return String(n).trim();
+  const {channel,motor_id}=splitUid(u);
+  return (twoArms()? armLabel(channel)+" · " : "")+"Motor "+motor_id;
+}
+function setMotorName(u,v){
+  if(v&&v.trim()) names[u]=v.trim(); else delete names[u];
+  try{ localStorage.setItem(NAMES_KEY,JSON.stringify(names)); }catch(_){}
+}
+
+// ---- shared live state ----
+let latest = {motors:[]};
+let motorsByUid = {};
+let calibrating = false;
+function connectedUids(){ return Object.keys(motorsByUid).sort(); }
+function connectedUidsOn(channel){ return connectedUids().filter(u=>String(splitUid(u).channel)===String(channel)); }
+// Distinct joint numbers across all connected arms, ascending.
+function connectedJoints(){
+  const s=new Set(Object.values(motorsByUid).map(m=>m.motor_id));
+  return [...s].sort((a,b)=>a-b);
+}
+// All connected uids that share a given joint number (one per arm that has it).
+function uidsForJoint(motorId){
+  return connectedUids().filter(u=>splitUid(u).motor_id===motorId);
+}
+function isCalibrated(m){ return !!(m && m.limits && m.limits.calibrated); }
+function allCalibrated(){ const u=connectedUids(); return u.length>0 && u.every(k=>isCalibrated(motorsByUid[k])); }
+
+// ============================================================
+//  WIZARD NAVIGATION
+// ============================================================
+const STEPS=["connect","calibrate","control"];
+let currentStep="connect";
+let calibrationSkipped=false;
+function stepReachable(step){
+  if(step==="connect") return true;
+  if(step==="calibrate") return connectedUids().length>0;
+  if(step==="control") return allCalibrated() || (calibrationSkipped && connectedUids().length>0);
+  return false;
+}
+function goStep(step){
+  if(!stepReachable(step)) return;
+  if(step!=="calibrate" && typeof closeManual==="function") closeManual();
+  currentStep=step;
+  STEPS.forEach(s=>document.getElementById("step-"+s).classList.toggle("hide", s!==step));
+  updateStepper();
+  if(step==="control"){
+    applyView(); window.dispatchEvent(new Event("resize"));
+    maybeAutoTutorial();
+  }
+}
+function updateStepper(){
+  const idx=STEPS.indexOf(currentStep);
+  document.querySelectorAll(".step-btn").forEach(b=>{
+    const s=b.dataset.step, i=STEPS.indexOf(s);
+    b.classList.toggle("active", s===currentStep);
+    b.classList.toggle("done", i<idx && stepReachable(s));
+    b.disabled=!stepReachable(s);
+  });
+  // connect->calibrate line done when connected; calibrate->control line done when calibrated
+  document.querySelector('[data-line="1"]').classList.toggle("done", connectedUids().length>0);
+  document.querySelector('[data-line="2"]').classList.toggle("done", allCalibrated());
+}
+document.querySelectorAll(".step-btn").forEach(b=>b.onclick=()=>goStep(b.dataset.step));
+document.getElementById("toCalibrate").onclick=()=>goStep("calibrate");
+document.getElementById("backToConnect").onclick=()=>goStep("connect");
+document.getElementById("toControl").onclick=()=>goStep("control");
+document.getElementById("backToCalibrate").onclick=()=>goStep("calibrate");
+document.getElementById("skipCalibration").onclick=()=>{
+  if(connectedUids().length===0) return;
+  if(!allCalibrated()){
+    if(!confirm("Skip calibration?\n\nUncalibrated motors will use the manufacturer's default range with no soft limits, and \"Return Home\" won't move them. You can calibrate later from this page.")) return;
+  }
+  calibrationSkipped=true;
+  goStep("control");
+};
+
+// ============================================================
+//  STEP 1 — DISCOVERY / CONNECT
+// ============================================================
+const ARM_JOINTS = 8;
+let foundMotors = [];
+
+function foundChannels(){
+  const s=new Set(foundMotors.map(f=>String(f.channel!=null?f.channel:"0")));
+  return [...s].sort();
+}
+function foundUid(f){ return uid(f.channel!=null?f.channel:"0", f.motor_id); }
+
+function renderScanResults(){
+  const wrap=document.getElementById("scanResult");
+  wrap.innerHTML="";
+  const channels=foundChannels();
+  const multi=channels.length>1;
+  channels.forEach(ch=>{
+    const group=foundMotors.filter(f=>String(f.channel!=null?f.channel:"0")===ch)
+                           .sort((a,b)=>a.motor_id-b.motor_id);
+    if(!group.length) return;
+    if(multi){
+      const h=document.createElement("div");
+      h.className="mhead"; h.style.margin="18px 2px 4px";
+      h.innerHTML=`<div class="title">${armLabel(ch)} <small>channel ${ch} &middot; ${group.length} motor${group.length>1?'s':''}</small></div>`;
+      wrap.appendChild(h);
+    }
+    group.forEach(f=>{
+      const u=foundUid(f);
+      const row=document.createElement("div"); row.className="mrow"; row.dataset.foundUid=u;
+      row.innerHTML=`
+        <div class="avatar">${f.motor_id}</div>
+        <div class="body">
+          <input class="name-input" type="text" value="${motorName(u).replace(/"/g,'&quot;')}" placeholder="Motor ${f.motor_id}">
+          <div class="sub">${armLabel(f.channel)} &middot; CAN id ${f.motor_id} &middot; channel ${f.channel} &middot; ${f.pos.toFixed(2)} rad</div>
+        </div>
+        <div class="right">
+          <span class="statetag todo found-state">found</span>
+          <button class="btn-accent rowbtn found-connect">Connect</button>
+        </div>`;
+      const nameIn=row.querySelector(".name-input");
+      nameIn.addEventListener("change",()=>{ setMotorName(u, nameIn.value); refreshNames(); });
+      const btn=row.querySelector(".found-connect");
+      btn.onclick=async()=>{
+        btn.disabled=true; btn.innerHTML='<span class="spin"></span>connecting';
+        const r=await post("/api/connect",{motor_id:f.motor_id,feedback_id:f.feedback_id,channel:f.channel,autodetect:true});
+        if(!r.ok){ btn.disabled=false; btn.textContent="retry"; }
+      };
+      wrap.appendChild(row);
+    });
+  });
+  document.getElementById("connectAllWrap").classList.toggle("hide", foundMotors.length===0);
+  updateScanRowStates();
+}
+function updateScanRowStates(){
+  document.querySelectorAll("#scanResult .mrow").forEach(row=>{
+    const u=row.dataset.foundUid;
+    const connected=!!motorsByUid[u];
+    const tag=row.querySelector(".found-state");
+    const btn=row.querySelector(".found-connect");
+    if(connected){
+      tag.textContent="connected"; tag.className="statetag ok found-state";
+      btn.textContent="Connected"; btn.disabled=true; btn.className="btn-ghost rowbtn found-connect";
+    }
+  });
+  const allConnected=foundMotors.length>0 && foundMotors.every(f=>!!motorsByUid[foundUid(f)]);
+  const btnAll=document.getElementById("btnConnectAll");
+  if(allConnected){ btnAll.textContent="All Connected"; btnAll.disabled=true; }
+}
+
+async function doScan(){
+  const out=document.getElementById("scanOut");
+  const btn=document.getElementById("btnScan"), btn2=document.getElementById("btnRescan");
+  [btn,btn2].forEach(b=>b&&(b.disabled=true));
+  flash(out,"scanning for motors on the bus…");
+  const res=await post("/api/scan",{start_id:1,end_id:ARM_JOINTS});
+  [btn,btn2].forEach(b=>b&&(b.disabled=false));
+  if(!res.ok){ flash(out,"scan error: "+res.error,true); return; }
+  foundMotors=res.found||[];
+  if(!foundMotors.length){
+    flash(out,"Bus is reachable, but no motors responded. Check 24V power and CAN wiring.",true);
+    renderScanResults(); return;
+  }
+  flash(out,`Found ${foundMotors.length} motor${foundMotors.length>1?'s':''}.`);
+  document.getElementById("btnConnectAll").disabled=false;
+  document.getElementById("btnConnectAll").textContent="Connect All Motors";
+  renderScanResults();
+}
+document.getElementById("btnScan").onclick=doScan;
+document.getElementById("btnRescan").onclick=doScan;
+document.getElementById("btnConnectAll").onclick=async()=>{
+  const btn=document.getElementById("btnConnectAll");
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span>connecting…';
+  const pending=foundMotors.filter(f=>!motorsByUid[foundUid(f)]);
+  await post("/api/connect",{motors:pending.map(f=>({motor_id:f.motor_id,feedback_id:f.feedback_id,channel:f.channel,autodetect:true}))});
+  btn.innerHTML="Connect All Motors";
+};
+document.getElementById("btnAdd").onclick=async()=>{
+  const out=document.getElementById("scanOut");
+  const r=await post("/api/connect",{motor_id:parseInt(document.getElementById("manId").value),
+    model:document.getElementById("manModel").value, channel:document.getElementById("manChan").value, autodetect:true});
+  flash(out,r.ok?"added ✓":"add failed: "+r.error,!r.ok);
+};
+
+// ============================================================
+//  STEP 2 — CALIBRATION
+// ============================================================
+const calRows={};
+function fmtDate(ts){ if(!ts) return ""; try{ return new Date(ts*1000).toLocaleString(); }catch(_){ return ""; } }
+
+// On OpenArm the calibrate step is organised by JOINT: one row per joint
+// number that calibrates that joint on every connected arm at once (e.g.
+// "Joint 5" sweeps joint 5 on both arms). Aloha stays per-motor (manual).
+function jointCalibrated(motorId){
+  const u=uidsForJoint(motorId); return u.length>0 && u.every(k=>isCalibrated(motorsByUid[k]));
+}
+function jointActive(motorId){
+  return uidsForJoint(motorId).some(k=>((motorsByUid[k].calibration)||{}).active);
+}
+
+function renderCalList(){
+  if(currentArm()==="aloha"){ renderCalListAloha(); return; }
+  renderCalListJoints();
+}
+
+function renderCalListJoints(){
+  const joints=connectedJoints();
+  const keys=new Set(joints.map(j=>"j:"+j));
+  Object.keys(calRows).forEach(k=>{ if(!keys.has(k)){ calRows[k].remove(); delete calRows[k]; } });
+  const wrap=document.getElementById("calList");
+  const multi=twoArms();
+  joints.forEach(j=>{
+    const rk="j:"+j;
+    const uids=uidsForJoint(j);
+    const mlist=uids.map(u=>motorsByUid[u]).filter(Boolean);
+    let row=calRows[rk];
+    if(!row){
+      row=document.createElement("div"); row.className="mrow"; row.dataset.joint=j;
+      row.innerHTML=`
+        <div class="avatar">${j}</div>
+        <div class="body">
+          <div class="title" style="font-size:15px;font-weight:700"></div>
+          <div class="sub"></div>
+        </div>
+        <div class="right">
+          <span class="statetag cal-tag"></span>
+          <button class="btn-ghost rowbtn cal-remove hide">Remove</button>
+          <button class="btn-ghost rowbtn cal-recal">Calibrate</button>
+        </div>`;
+      row.querySelector(".cal-recal").onclick=async()=>{
+        if(calibrating) return;
+        const arms=uidsForJoint(j).length;
+        if(!confirm(`Calibrate joint ${j}${arms>1?` on all ${arms} arms`:''}?\n\nThe joint will drive to both hardstops, then zero at the midpoint. Keep clear and be ready to E-STOP.`)) return;
+        await calibrateJoints([j], true);
+      };
+      row.querySelector(".cal-remove").onclick=async()=>{
+        if(calibrating) return;
+        if(!confirm(`Remove the saved calibration for joint ${j}?\n\nSoft limits will be cleared on every arm and you'll need to re-calibrate before controlling it.`)) return;
+        const cmd=document.getElementById("calCmd");
+        flash(cmd,`Removing calibration for joint ${j}…`);
+        let ok=true;
+        for(const u of uidsForJoint(j)){
+          const {channel,motor_id}=splitUid(u);
+          const r=await post("/api/clear_calibration",{channel,motor_id});
+          ok=ok&&r.ok;
+        }
+        flash(cmd,ok?`Calibration removed for joint ${j} ✓`:`Remove failed`,!ok);
+      };
+      calRows[rk]=row;
+      wrap.appendChild(row);
+    }
+    row.querySelector(".title").textContent= multi ? `Joint ${j}` : motorName(uids[0]);
+    row.querySelector(".sub").textContent= multi
+      ? uids.map(u=>armLabel(splitUid(u).channel)).join(" + ")+` · ${uids.length} motor${uids.length>1?'s':''}`
+      : `CAN id ${j}${mlist[0]&&mlist[0].model? " · "+mlist[0].model:""}`;
+    const tag=row.querySelector(".cal-tag");
+    const recal=row.querySelector(".cal-recal");
+    const remove=row.querySelector(".cal-remove");
+    if(jointActive(j)){
+      const am=mlist.find(m=>(m.calibration||{}).active)||{};
+      const cal=am.calibration||{};
+      tag.className="statetag busy cal-tag";
+      tag.innerHTML=`<span class="spin"></span>${(multi?armLabel(am.channel)+": ":"")+(cal.message||cal.phase||"calibrating")}`;
+      recal.disabled=true; remove.classList.add("hide");
+    } else if(jointCalibrated(j)){
+      tag.className="statetag ok cal-tag";
+      tag.textContent= multi ? `calibrated · ${uids.length} arm${uids.length>1?'s':''}` : "calibrated";
+      recal.disabled=calibrating; recal.textContent="Re-calibrate";
+      remove.classList.remove("hide"); remove.disabled=calibrating;
+    } else {
+      const done=uids.filter(u=>isCalibrated(motorsByUid[u])).length;
+      tag.className="statetag todo cal-tag";
+      tag.textContent= (multi&&done>0) ? `${done}/${uids.length} arms calibrated` : "needs calibration";
+      recal.disabled=calibrating; recal.textContent="Calibrate";
+      remove.classList.add("hide");
+    }
+  });
+}
+
+function renderCalListAloha(){
+  const uids=new Set(connectedUids());
+  Object.keys(calRows).forEach(k=>{ if(!uids.has(k)){ calRows[k].remove(); delete calRows[k]; } });
+  const wrap=document.getElementById("calList");
+  connectedUids().forEach(u=>{
+    const m=motorsByUid[u]; if(!m) return;
+    let row=calRows[u];
+    if(!row){
+      row=document.createElement("div"); row.className="mrow"; row.dataset.calUid=u;
+      row.innerHTML=`
+        <div class="avatar">${m.motor_id}</div>
+        <div class="body">
+          <input class="name-input" type="text" placeholder="Motor ${m.motor_id}">
+          <div class="sub"></div>
+        </div>
+        <div class="right">
+          <span class="statetag cal-tag"></span>
+          <button class="btn-ghost rowbtn cal-remove hide">Remove</button>
+          <button class="btn-ghost rowbtn cal-recal">Calibrate</button>
+        </div>`;
+      const nameIn=row.querySelector(".name-input");
+      nameIn.value=motorName(u);
+      nameIn.addEventListener("change",()=>{ setMotorName(u, nameIn.value); refreshNames(); });
+      row.querySelector(".cal-recal").onclick=async()=>{
+        if(calibrating) return;
+        openManual(u);
+      };
+      row.querySelector(".cal-remove").onclick=async()=>{
+        if(calibrating) return;
+        if(!confirm(`Remove the saved calibration for ${motorName(u)}?\n\nThe motor's soft limits will be cleared and the saved calibration forgotten. You'll need to re-calibrate before controlling it.`)) return;
+        const {channel,motor_id}=splitUid(u);
+        const cmd=document.getElementById("calCmd");
+        flash(cmd,`Removing calibration for ${motorName(u)}…`);
+        const r=await post("/api/clear_calibration",{channel,motor_id});
+        flash(cmd,r.ok?`Calibration removed for ${motorName(u)} ✓`:`Remove failed: ${r.error||"unknown error"}`,!r.ok);
+      };
+      calRows[u]=row;
+      wrap.appendChild(row);
+    }
+    const nameIn=row.querySelector(".name-input");
+    if(document.activeElement!==nameIn) nameIn.value=motorName(u);
+    row.querySelector(".sub").textContent=`CAN id ${m.motor_id}${m.model? " · "+m.model:""}`;
+    const tag=row.querySelector(".cal-tag");
+    const cal=m.calibration||{};
+    const recal=row.querySelector(".cal-recal");
+    const remove=row.querySelector(".cal-remove");
+    if(cal.active){
+      tag.className="statetag busy cal-tag";
+      tag.innerHTML=`<span class="spin"></span>${cal.message||cal.phase||"calibrating"}`;
+      recal.disabled=true; remove.classList.add("hide");
+    } else if(isCalibrated(m)){
+      tag.className="statetag ok cal-tag";
+      const d=fmtDate(cal.saved_at);
+      tag.textContent=d?("calibrated · "+d):"calibrated";
+      recal.disabled=calibrating; recal.textContent="Re-calibrate";
+      remove.classList.remove("hide"); remove.disabled=calibrating;
+    } else {
+      tag.className="statetag todo cal-tag";
+      tag.textContent=cal.phase==="failed"?"failed — retry":"needs calibration";
+      recal.disabled=calibrating; recal.textContent="Calibrate";
+      remove.classList.add("hide");
+    }
+  });
+}
+
+function updateCalStep(){
+  const uids=connectedUids();
+  const uncal=uids.filter(u=>!isCalibrated(motorsByUid[u]));
+  const allCal=uids.length>0 && uncal.length===0;
+  const banner=document.getElementById("calBanner");
+  const calAll=document.getElementById("btnCalAll");
+  const recalAll=document.getElementById("btnRecalAll");
+  const multi=twoArms();
+  const unit=multi?"motor":"motor";
+
+  if(uids.length===0){
+    banner.innerHTML=`<div class="banner banner-warn">No motors connected yet. Go back and connect first.</div>`;
+  } else if(allCal){
+    banner.innerHTML=`<div class="banner banner-good">&#10003; All motors are calibrated${uids.some(u=>(motorsByUid[u].calibration||{}).saved_at)?' (loaded from a saved calibration)':''}. You're ready to control them &mdash; or re-calibrate if anything changed.</div>`;
+  } else if(multi){
+    const joints=connectedJoints(), jdone=joints.filter(jointCalibrated).length;
+    banner.innerHTML=`<div class="banner banner-warn">${joints.length-jdone} of ${joints.length} joints still need calibration. Calibrating a joint calibrates it on both arms.</div>`;
+  } else {
+    banner.innerHTML=`<div class="banner banner-warn">${uncal.length} of ${uids.length} motor${uids.length>1?'s':''} still need calibration before you can continue.</div>`;
+  }
+  const aloha = currentArm()==="aloha";
+  calAll.classList.toggle("hide", allCal || aloha);
+  recalAll.classList.toggle("hide", !allCal || aloha);
+  calAll.disabled=calibrating || uncal.length===0;
+  recalAll.disabled=calibrating;
+  const skip=document.getElementById("skipCalibration");
+  skip.classList.toggle("hide", allCal || uids.length===0);
+  skip.disabled=calibrating;
+  document.getElementById("toControl").disabled=(!allCal && !calibrationSkipped) || uids.length===0 || calibrating;
+}
+
+async function runAutoCalibrate(channel, motorId){
+  const r=await post("/api/auto_calibrate",{channel, motor_id:motorId});
+  if(r.ok) await post("/api/target",{channel, motor_id:motorId, kp:defaultGains.kp, kd:defaultGains.kd});
+  return r;
+}
+// Calibrate each joint across every arm that has it (one joint at a time).
+async function calibrateJoints(joints, returnHome){
+  if(!joints.length || calibrating) return;
+  calibrating=true; updateCalStep();
+  const cmd=document.getElementById("calCmd");
+  for(const j of joints){
+    for(const u of uidsForJoint(j)){
+      const {channel,motor_id}=splitUid(u);
+      flash(cmd, twoArms()?`Calibrating joint ${j} (${armLabel(channel)})…`:`Calibrating ${motorName(u)}…`);
+      const r=await runAutoCalibrate(channel, motor_id);
+      if(!r.ok){ calibrating=false; updateCalStep();
+        flash(cmd,`Calibration failed for joint ${j} (${armLabel(channel)}): ${r.error||"unknown error"}`,true); return; }
+    }
+  }
+  if(returnHome){ flash(cmd,"Calibration done. Returning to home position…");
+    await post("/api/home",{}); }
+  calibrating=false; updateCalStep();
+  flash(cmd,`Calibrated ${joints.length} joint${joints.length>1?'s':''} ✓`);
+}
+document.getElementById("btnCalAll").onclick=async()=>{
+  const uncal=connectedJoints().filter(j=>!jointCalibrated(j));
+  if(!uncal.length) return;
+  if(!confirm("Calibrate every joint that still needs it?\n\nEach joint moves to its hardstops one at a time (on every arm), then zeroes at the midpoint. Keep clear and be ready to E-STOP.")) return;
+  await calibrateJoints(uncal, true);
+};
+document.getElementById("btnRecalAll").onclick=async()=>{
+  if(!confirm("Re-calibrate ALL connected joints?\n\nThis overwrites the saved calibration for every motor on every arm. Keep clear and be ready to E-STOP.")) return;
+  await calibrateJoints(connectedJoints(), true);
+};
+
+// ============================================================
+//  STEP 3 — CONTROL
+// ============================================================
+const MODE_FIELDS = {
+  mit:["pos","vel","gains","tau"], pos_vel:["pos","vlim"], force_pos:["pos","vlim","ratio"],
+};
+const MODE_HINT = {
+  mit:"MIT impedance control: holds Target Position with Kp/Kd plus feed-forward velocity & torque. Set Kp>0 to move.",
+  pos_vel:"Trapezoidal position mode: drives to Target Position capped at the Velocity Limit.",
+  force_pos:"Force-position hybrid: position target with velocity limit and force ratio.",
+};
+const cards = {};
+
+function makeCard(u){
+  const {channel,motor_id}=splitUid(u);
+  const tpl=document.getElementById("motorTpl");
+  const node=tpl.content.firstElementChild.cloneNode(true);
+  const q=sel=>node.querySelector(sel), qa=sel=>node.querySelectorAll(sel);
+  const ctx={uid:u, id:motor_id, channel, node, mode:"mit", lims:{pmax:12.5,vmax:30,tmax:10}, plot:{pos:[],vel:[],max:200}, editing:false};
+
+  function applyMode(){
+    if(!MODE_FIELDS[ctx.mode]) ctx.mode="mit";
+    qa(".ctl").forEach(e=>e.classList.toggle("hide", !MODE_FIELDS[ctx.mode].includes(e.dataset.for)));
+    q(".m-hint").textContent=MODE_HINT[ctx.mode];
+  }
+  qa(".m-mode button").forEach(b=>{
+    b.onclick=async()=>{
+      qa(".m-mode button").forEach(x=>x.classList.remove("active"));
+      b.classList.add("active"); ctx.mode=b.dataset.mode; applyMode();
+      await post("/api/mode",{channel,motor_id,mode:ctx.mode});
+    };
+  });
+  function link(rangeSel,numSel,key,valSel){
+    const r=q(rangeSel), n=numSel?q(numSel):null, v=valSel?q(valSel):null;
+    const push=()=>{const val=parseFloat(r.value); if(n)n.value=val; if(v)v.textContent=val;
+      post("/api/target",{channel,motor_id,[key]:val});};
+    const mark=()=>{ctx.editing=true; clearTimeout(ctx._ed); ctx._ed=setTimeout(()=>ctx.editing=false,1200);};
+    r.addEventListener("input",()=>{mark();push();});
+    if(n)n.addEventListener("change",()=>{r.value=n.value; mark(); push();});
+  }
+  link(".r-pos",".n-pos","pos"); link(".r-vel",".n-vel","vel"); link(".r-vlim",".n-vlim","vlim");
+  link(".r-kp",null,"kp",".kp-val"); link(".r-kd",null,"kd",".kd-val");
+  link(".r-tau",null,"tau",".tau-val"); link(".r-ratio",null,"ratio",".ratio-val");
+
+  q(".m-enable").onclick=async()=>{
+    const p=parseFloat(q(".m-pos").textContent)||0;
+    const kp=parseFloat(q(".r-kp").value)||0, kd=parseFloat(q(".r-kd").value)||0;
+    q(".r-pos").value=p; q(".n-pos").value=p;
+    await post("/api/target",{channel,motor_id,pos:p,kp,kd});
+    const r=await post("/api/enable",{channel,motor_id});
+    flash(q(".m-cmd"),r.ok?`enabled ✓ (holding ${p.toFixed(2)} rad)`:"enable failed: "+r.error,!r.ok);
+  };
+  q(".m-disable").onclick=async()=>{await post("/api/disable",{channel,motor_id});flash(q(".m-cmd"),"disabled");};
+  q(".m-remove").onclick=async()=>{ await post("/api/disable",{channel,motor_id}); await post("/api/disconnect",{channel,motor_id}); };
+
+  function setLimits(l){
+    ctx.lims=l;
+    const posMin=(l.pos_min!=null)?l.pos_min:-l.pmax;
+    const posMax=(l.pos_max!=null)?l.pos_max:l.pmax;
+    q(".r-pos").min=posMin; q(".r-pos").max=posMax; q(".n-pos").min=posMin; q(".n-pos").max=posMax;
+    q(".r-vel").min=-l.vmax; q(".r-vel").max=l.vmax; q(".r-vlim").max=l.vmax;
+    q(".r-tau").min=-l.tmax; q(".r-tau").max=l.tmax;
+    q(".pos-min").textContent=(+posMin).toFixed(2); q(".pos-max").textContent=(+posMax).toFixed(2);
+    qa(".vel-lim").forEach(e=>e.textContent=l.vmax); qa(".tau-lim").forEach(e=>e.textContent=l.tmax);
+    const tag=l.calibrated?"calibrated":"model";
+    q(".m-lim").textContent=`${tag} limits  P ${(+posMin).toFixed(2)}..${(+posMax).toFixed(2)}  V±${l.vmax}  T±${l.tmax}`;
+  }
+  function draw(){
+    const c=q(".m-plot"), x=c.getContext("2d"), W=c.width=c.clientWidth||800, H=c.height;
+    x.clearRect(0,0,W,H); x.strokeStyle="#283145"; x.lineWidth=1;
+    for(let i=0;i<=4;i++){const y=H*i/4;x.beginPath();x.moveTo(0,y);x.lineTo(W,y);x.stroke();}
+    const posRange=Math.max(Math.abs(ctx.lims.pos_min||-ctx.lims.pmax),Math.abs(ctx.lims.pos_max||ctx.lims.pmax),0.1);
+    [{d:ctx.plot.pos,c:"#4f8cff",r:posRange},{d:ctx.plot.vel,c:"#37d399",r:ctx.lims.vmax}].forEach(s=>{
+      if(s.d.length<2)return;
+      x.strokeStyle=s.c;x.lineWidth=2;x.beginPath();
+      s.d.forEach((v,i)=>{const px=W*i/(ctx.plot.max-1);const py=H/2-(v/(s.r||1))*(H/2-6);
+        i?x.lineTo(px,py):x.moveTo(px,py);});
+      x.stroke();
+    });
+    x.fillStyle="#4f8cff";x.font="10px sans-serif";x.fillText("position",8,14);
+    x.fillStyle="#37d399";x.fillText("velocity",66,14);
+  }
+  ctx.update=function(s){
+    q(".m-name").textContent=motorName(uidOf(s));
+    q(".m-model").textContent=`${twoArms()?armLabel(s.channel)+" · ":""}CAN id ${s.motor_id}${s.model? " · "+s.model : ""}`;
+    const on=s.state.online;
+    if(s.estopped){ q(".m-dot").className="m-dot dot"; q(".m-online").textContent="E-STOPPED"; }
+    else { q(".m-dot").className="m-dot dot"+(on?" on":(s.enabled?" warn":""));
+      q(".m-online").textContent=on?"online":(s.enabled?"enabled":"connected"); }
+    setLimits(s.limits);
+    q(".m-pos").textContent=s.state.pos.toFixed(3);
+    q(".m-vel").textContent=s.state.vel.toFixed(3);
+    q(".m-torq").textContent=s.state.torq.toFixed(3);
+    q(".m-tmos").textContent=s.state.t_mos;
+    q(".m-trot").textContent=s.state.t_rotor;
+    q(".m-stat").textContent=s.state.status_text||s.state.status_code;
+    q(".m-stat").style.color=(s.state.status_code>=8)?"var(--bad)":"";
+    const cal=s.calibration||{};
+    const live=s.enabled && !s.estopped;
+    q(".m-enable").disabled=s.enabled||!!cal.active;
+    q(".m-enable").classList.toggle("engaged", live);
+    q(".m-enable").textContent= live ? "Enabled \u2713" : "Enable";
+    q(".m-disable").disabled=!s.enabled||!!cal.active;
+    if(cal.active) flash(q(".m-cmd"),"calibration: "+(cal.message||cal.phase));
+    else if(cal.phase==="failed") flash(q(".m-cmd"),"calibration failed: "+(cal.error||cal.message),true);
+    else if(s.fault) flash(q(".m-cmd"),"fault: "+s.fault,true);
+    if(s.mode && s.mode!==ctx.mode){
+      ctx.mode=s.mode;
+      qa(".m-mode button").forEach(x=>x.classList.toggle("active",x.dataset.mode===ctx.mode));
+      applyMode();
+    }
+    if(on){ctx.plot.pos.push(s.state.pos);ctx.plot.vel.push(s.state.vel);
+      if(ctx.plot.pos.length>ctx.plot.max){ctx.plot.pos.shift();ctx.plot.vel.shift();}draw();}
+  };
+  applyMode();
+  document.getElementById("motors").appendChild(node);
+  cards[u]=ctx;
+  applyGainsToCard(ctx, defaultGains);
+  return ctx;
+}
+function removeCard(u){ if(cards[u]){cards[u].node.remove(); delete cards[u];} }
+
+// keep names in sync across all surfaces after a rename
+function refreshNames(){
+  Object.values(cards).forEach(c=>c.node.querySelector(".m-name").textContent=motorName(c.uid));
+}
+
+// ============================================================
+//  GROUP CONTROL
+// ============================================================
+const grp={mode:"mit"};
+// The control step shows one panel per arm. `activeChannel` is the arm whose
+// group + per-motor controls are currently on screen; group commands only touch
+// that arm's motors so each arm is driven independently.
+let activeChannel=null;
+function ensureActiveChannel(){
+  const present=channelsPresent();
+  if(!present.length){ activeChannel=null; return; }
+  if(activeChannel==null || !present.includes(String(activeChannel))) activeChannel=present[0];
+  else activeChannel=String(activeChannel);
+}
+function activeUids(){ return Object.keys(cards).filter(u=>String(splitUid(u).channel)===String(activeChannel)); }
+async function broadcast(url, body){
+  return Promise.all(activeUids().map(u=>{const {channel,motor_id}=splitUid(u);
+    return post(url,Object.assign({channel,motor_id},body||{}));}));
+}
+const G=id=>document.getElementById(id);
+function grpApplyMode(){
+  if(!MODE_FIELDS[grp.mode]) grp.mode="mit";
+  document.querySelectorAll("#groupCard .grpctl").forEach(e=>
+    e.classList.toggle("hide", !MODE_FIELDS[grp.mode].includes(e.dataset.for)));
+  G("grpHint").textContent=MODE_HINT[grp.mode];
+}
+document.querySelectorAll("#grpMode button").forEach(b=>{
+  b.onclick=async()=>{
+    document.querySelectorAll("#grpMode button").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); grp.mode=b.dataset.mode; grpApplyMode();
+    await broadcast("/api/mode",{mode:grp.mode});
+    flash(G("grpCmd"),"mode → "+grp.mode+" on "+armLabel(activeChannel));
+  };
+});
+function grpLink(rangeId,numId,key,valId){
+  const r=G(rangeId), n=numId?G(numId):null, v=valId?G(valId):null;
+  const push=()=>{const val=parseFloat(r.value); if(n)n.value=val; if(v)v.textContent=val;
+    broadcast("/api/target",{[key]:val});};
+  r.addEventListener("input",push);
+  if(n)n.addEventListener("change",()=>{r.value=n.value; push();});
+}
+grpLink("gPos","gnPos","pos"); grpLink("gVel","gnVel","vel"); grpLink("gVlim","gnVlim","vlim");
+grpLink("gKp",null,"kp","gKpVal"); grpLink("gKd",null,"kd","gKdVal");
+grpLink("gTau",null,"tau","gTauVal"); grpLink("gRatio",null,"ratio","gRatioVal");
+
+G("grpEnable").onclick=async()=>{
+  flash(G("grpCmd"),`enabling ${armLabel(activeChannel)} motors…`);
+  await Promise.all(activeUids().map(u=>{
+    const {channel,motor_id}=splitUid(u);
+    const c=cards[u], p=parseFloat(c.node.querySelector(".m-pos").textContent)||0;
+    const kp=parseFloat(c.node.querySelector(".r-kp").value)||0;
+    const kd=parseFloat(c.node.querySelector(".r-kd").value)||0;
+    c.node.querySelector(".r-pos").value=p; c.node.querySelector(".n-pos").value=p;
+    return post("/api/target",{channel,motor_id,pos:p,kp,kd});
+  }));
+  await broadcast("/api/enable");
+  flash(G("grpCmd"),`enabled ${armLabel(activeChannel)} ✓ (each holding its current angle)`);
+};
+G("grpDisable").onclick=async()=>{await broadcast("/api/disable");flash(G("grpCmd"),"disabled "+armLabel(activeChannel));};
+G("grpStop").onclick=async()=>{await post("/api/estop",{channel:activeChannel}); flash(G("grpCmd"),`E-STOP — ${armLabel(activeChannel)} torque off`,true);};
+G("grpHome").onclick=async()=>{
+  G("grpHome").disabled=true; flash(G("grpCmd"),`returning ${armLabel(activeChannel)} to home…`);
+  const r=await post("/api/home",{channel:activeChannel}); G("grpHome").disabled=false;
+  if(!r.ok){flash(G("grpCmd"),"return home failed: "+r.error,true);return;}
+  activeUids().forEach(u=>{const c=cards[u]; if(!c)return;
+    c.node.querySelector(".r-pos").value=0; c.node.querySelector(".n-pos").value=0;});
+  G("gPos").value=0; G("gnPos").value=0;
+  const n=(r.homed||[]).length;
+  flash(G("grpCmd"),`returning ${n} motor${n===1?'':'s'} home`);
+};
+
+// ---- arm tabs (which arm's panel is shown) ----
+function renderArmTabs(){
+  const present=channelsPresent();
+  const wrap=G("armTabs");
+  G("armTabsCard").classList.toggle("hide", present.length<2);
+  wrap.innerHTML="";
+  present.forEach(ch=>{
+    const b=document.createElement("button");
+    b.dataset.channel=ch; b.textContent=armLabel(ch);
+    b.classList.toggle("active", String(ch)===String(activeChannel));
+    b.onclick=()=>{ activeChannel=String(ch); applyView(); };
+    wrap.appendChild(b);
+  });
+}
+
+// ---- view tabs (group vs individual) ----
+let viewMode="group";
+document.querySelectorAll("#viewTabs button").forEach(b=>{
+  b.onclick=()=>{ if(b.disabled) return; viewMode=b.dataset.view; applyView(); };
+});
+function applyView(){
+  ensureActiveChannel();
+  renderArmTabs();
+  const total=Object.keys(cards).length;
+  // Only the active arm's cards are visible; group needs 2+ on that arm.
+  let shown=0;
+  Object.keys(cards).forEach(u=>{
+    const onArm=String(splitUid(u).channel)===String(activeChannel);
+    if(onArm) shown++;
+  });
+  const groupOk=shown>=2;
+  document.querySelectorAll("#viewTabs button").forEach(b=>{
+    const isGroup=b.dataset.view==="group";
+    b.disabled=isGroup && !groupOk;
+    b.title=(isGroup && !groupOk) ? "connect 2+ motors on this arm to use group control" : "";
+  });
+  const mode=groupOk ? viewMode : "individual";
+  document.querySelectorAll("#viewTabs button").forEach(b=>b.classList.toggle("active", b.dataset.view===mode));
+  G("groupCard").classList.toggle("hide", !(mode==="group" && groupOk));
+  G("motors").classList.toggle("hide", mode!=="individual");
+  G("viewTabsCard").classList.toggle("hide", total===0);
+  // Show only the active arm's motor cards.
+  Object.keys(cards).forEach(u=>{
+    const onArm=String(splitUid(u).channel)===String(activeChannel);
+    cards[u].node.classList.toggle("hide", !onArm);
+  });
+  G("grpTitleArm").textContent= twoArms() ? (" — "+armLabel(activeChannel)) : "";
+}
+function updateGroupPanel(){
+  const motors=activeUids().map(u=>motorsByUid[u]).filter(Boolean);
+  if(motors.length<1) return;
+  G("grpCount").textContent=motors.length;
+  const anyOnline=motors.some(m=>m.state.online);
+  const anyEnabled=motors.some(m=>m.enabled);
+  const allEnabled=motors.every(m=>m.enabled && !m.estopped);
+  const allEstop=motors.every(m=>m.estopped);
+  G("grpDot").className="dot"+(allEstop?"":(anyOnline?" on":(anyEnabled?" warn":"")));
+  // reflect live enable state on the buttons so it's obvious what's running
+  const be=G("grpEnable"), bd=G("grpDisable");
+  be.classList.toggle("engaged", allEnabled);
+  be.textContent = allEnabled ? "Enabled \u2713" : (anyEnabled ? "Enable Remaining" : "Enable All");
+  be.disabled = allEnabled;
+  bd.disabled = !anyEnabled;
+  const posMin=Math.max(...motors.map(m=>m.limits.pos_min!=null?m.limits.pos_min:-m.limits.pmax));
+  const posMax=Math.min(...motors.map(m=>m.limits.pos_max!=null?m.limits.pos_max:m.limits.pmax));
+  const vmax=Math.min(...motors.map(m=>m.limits.vmax));
+  const tmax=Math.min(...motors.map(m=>m.limits.tmax));
+  G("gPos").min=posMin; G("gPos").max=posMax; G("gnPos").min=posMin; G("gnPos").max=posMax;
+  G("gVel").min=-vmax; G("gVel").max=vmax; G("gVlim").max=vmax;
+  G("gTau").min=-tmax; G("gTau").max=tmax;
+  document.querySelector(".gpos-min").textContent=(+posMin).toFixed(2);
+  document.querySelector(".gpos-max").textContent=(+posMax).toFixed(2);
+  document.querySelectorAll(".gvel-lim").forEach(e=>e.textContent=vmax);
+  document.querySelectorAll(".gtau-lim").forEach(e=>e.textContent=tmax);
+}
+grpApplyMode();
+
+// ---- gains preset (Kp / Kd) ----
+const GAINS_KEY="damiao.gains.default";
+const FACTORY_GAINS={kp:20, kd:4};
+function loadGains(){
+  try{ const g=JSON.parse(localStorage.getItem(GAINS_KEY));
+    if(g && isFinite(g.kp) && isFinite(g.kd)) return {kp:+g.kp, kd:+g.kd}; }catch(_){}
+  return Object.assign({}, FACTORY_GAINS);
+}
+let defaultGains=loadGains();
+function applyGainsToCard(ctx, g){
+  const n=ctx.node;
+  n.querySelector(".r-kp").value=g.kp; n.querySelector(".kp-val").textContent=g.kp;
+  n.querySelector(".r-kd").value=g.kd; n.querySelector(".kd-val").textContent=g.kd;
+  post("/api/target",{channel:ctx.channel, motor_id:ctx.id, kp:g.kp, kd:g.kd});
+}
+function applyGainsAll(g){
+  G("gKp").value=g.kp; G("gKpVal").textContent=g.kp;
+  G("gKd").value=g.kd; G("gKdVal").textContent=g.kd;
+  Object.values(cards).forEach(ctx=>applyGainsToCard(ctx, g));
+}
+function reflectPreset(){
+  G("presetKp").value=defaultGains.kp; G("presetKd").value=defaultGains.kd;
+  G("presetCurKp").textContent=defaultGains.kp; G("presetCurKd").textContent=defaultGains.kd;
+}
+function readPresetInputs(){
+  return {kp:Math.max(0, parseFloat(G("presetKp").value)||0), kd:Math.max(0, parseFloat(G("presetKd").value)||0)};
+}
+G("presetApply").onclick=()=>{
+  const g=readPresetInputs(); applyGainsAll(g);
+  const n=Object.keys(cards).length;
+  flash(G("presetMsg"), n? `applied Kp ${g.kp} / Kd ${g.kd} to ${n} motor${n>1?'s':''}` : "no motors connected yet");
+};
+G("presetSave").onclick=()=>{
+  defaultGains=readPresetInputs();
+  try{ localStorage.setItem(GAINS_KEY, JSON.stringify(defaultGains)); }catch(_){}
+  reflectPreset(); applyGainsAll(defaultGains);
+  flash(G("presetMsg"), `saved ✓ — new motors start at Kp ${defaultGains.kp} / Kd ${defaultGains.kd}`);
+};
+reflectPreset();
+
+// ============================================================
+//  DOWNLOAD MOTOR DATA
+// ============================================================
+function unixToIso(ts){ return ts ? new Date(ts*1000).toISOString() : null; }
+function sampleAgeSeconds(ts){ return ts ? +((Date.now()/1000)-ts).toFixed(3) : null; }
+function motorExportRecord(m){
+  const state=m.state||{}, lim=m.limits||{};
+  return {
+    motor_id:m.motor_id, feedback_id:m.feedback_id, model:m.model, name:motorName(m.motor_id),
+    connection:{online:!!state.online, enabled:!!m.enabled, estopped:!!m.estopped, max_power:!!m.max_power,
+      mode:m.mode, fault:m.fault||null, last_sample_at:unixToIso(state.ts), sample_age_seconds:sampleAgeSeconds(state.ts)},
+    telemetry:{position_rad:state.pos, velocity_rad_s:state.vel, torque_nm:state.torq,
+      mosfet_temp_c:state.t_mos, rotor_temp_c:state.t_rotor, status_code:state.status_code, status_text:state.status_text},
+    motor_parameters:{pmax_rad:lim.pmax, vmax_rad_s:lim.vmax, tmax_nm:lim.tmax,
+      pos_min_rad:lim.pos_min, pos_max_rad:lim.pos_max, calibrated:!!lim.calibrated},
+    commanded_setpoints:Object.assign({}, m.setpoints||{}),
+    calibration:Object.assign({}, m.calibration||{}),
+  };
+}
+async function downloadMotorData(){
+  const status=await fetch("/api/status").then(r=>r.json());
+  const motors=(status.motors||[]).map(motorExportRecord);
+  const payload={schema_version:3, exported_at:new Date().toISOString(), source:"Motor Control",
+    connection:{device_type:status.device_type, channel:status.channel, connected:!!status.connected,
+      fault:status.fault||null, motor_count:motors.length}, motors};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob); const a=document.createElement("a");
+  a.href=url; a.download=`motor-data-${new Date().toISOString().replace(/[:.]/g,"-")}.json`;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+G("btnDownloadData").onclick=downloadMotorData;
+
+document.getElementById("btnEstopAll").onclick=async()=>{
+  await post("/api/estop",{});
+  Object.values(cards).forEach(c=>flash(c.node.querySelector(".m-cmd"),"E-STOP — torque off",true));
+};
+
+// ============================================================
+//  GUIDED TUTORIAL (spotlight walkthrough)
+// ============================================================
+const TUT_KEY="motor.tutorial.seen";
+let tutSteps=[], tutIdx=0, tutActive=false;
+function tutResolve(sel){ const el=document.querySelector(sel); return (el && el.getClientRects().length) ? el : null; }
+function buildTutSteps(){
+  const groupVisible = !G("groupCard").classList.contains("hide");
+  const steps=[{sel:"#viewTabs", t:"Two ways to drive",
+    b:"Switch between controlling every motor together (Group) or fine-tuning each one on its own (Individual)."}];
+  if(groupVisible){
+    steps.push({sel:"#grpEnable", t:"Enable All",
+      b:"Powers on every motor so they hold their position and respond to your commands."});
+    steps.push({sel:'#groupCard .grpctl[data-for="pos"]', t:"Move the motors",
+      b:"Drag this slider to send all motors to a target position at the same time."});
+    steps.push({sel:"#grpHome", t:"Return Home",
+      b:"Smoothly drives every calibrated motor back to its zero (home) position."});
+    const adv=document.querySelector("#groupCard .advanced-settings");
+    if(adv) adv.open=true;
+    steps.push({sel:'#groupCard .grpctl[data-for="gains"] > div:first-child', t:"Stiffness (Kp)",
+      b:"How firmly the motors hold their target. Higher stiffness snaps to position harder and resists being pushed; lower feels softer and more compliant."});
+    steps.push({sel:'#groupCard .grpctl[data-for="gains"] > div:last-child', t:"Damping (Kd)",
+      b:"How much the motors resist fast motion. Higher damping smooths movement and reduces overshoot or oscillation; lower lets them move more freely."});
+    steps.push({sel:"#grpDisable", t:"Disable All",
+      b:"Releases the motors so they go limp \u2014 no holding torque."});
+  } else {
+    steps.push({sel:"#motors .motor-card .m-enable", t:"Enable",
+      b:"Powers on this motor so it holds its position and responds to your commands."});
+    steps.push({sel:'#motors .motor-card .ctl[data-for="pos"]', t:"Move the motor",
+      b:"Drag this slider to send the motor to a target position."});
+    steps.push({sel:"#motors .motor-card .m-disable", t:"Disable",
+      b:"Releases the motor so it goes limp \u2014 no holding torque."});
+  }
+  steps.push({sel:"#btnEstopAll", t:"Emergency stop",
+    b:"Instantly cuts all torque on every motor. Hit this any time something looks wrong \u2014 it\u2019s always available at the top of the screen."});
+  return steps.filter(s=>tutResolve(s.sel));
+}
+function positionTut(){
+  if(!tutActive) return;
+  const s=tutSteps[tutIdx], el=s&&tutResolve(s.sel);
+  const spot=G("tutSpot"), card=G("tutCard");
+  if(!el){ spot.style.display="none"; return; }
+  spot.style.display="block";
+  const r=el.getBoundingClientRect(), pad=8;
+  spot.style.left=(r.left-pad)+"px"; spot.style.top=(r.top-pad)+"px";
+  spot.style.width=(r.width+pad*2)+"px"; spot.style.height=(r.height+pad*2)+"px";
+  const cr=card.getBoundingClientRect();
+  let top=r.bottom+14;
+  if(top+cr.height>window.innerHeight-12) top=Math.max(12, r.top-cr.height-14);
+  let left=Math.min(Math.max(12, r.left), window.innerWidth-cr.width-12);
+  card.style.top=top+"px"; card.style.left=left+"px";
+}
+function showTutStep(){
+  const s=tutSteps[tutIdx];
+  if(!s){ endTutorial(); return; }
+  G("tutStepNum").textContent=`Step ${tutIdx+1} of ${tutSteps.length}`;
+  G("tutTitle").textContent=s.t;
+  G("tutBody").textContent=s.b;
+  G("tutPrev").classList.toggle("hide", tutIdx===0);
+  G("tutNext").textContent=(tutIdx===tutSteps.length-1)?"Done":"Next";
+  const el=tutResolve(s.sel);
+  if(el) el.scrollIntoView({block:"center", behavior:"smooth"});
+  requestAnimationFrame(()=>requestAnimationFrame(positionTut));
+}
+function startTutorial(){
+  if(tutActive) return;
+  tutSteps=buildTutSteps();
+  if(!tutSteps.length) return;
+  tutActive=true; tutIdx=0;
+  G("tutorial").classList.remove("hide");
+  showTutStep();
+  window.addEventListener("resize", positionTut);
+  window.addEventListener("scroll", positionTut, true);
+}
+function endTutorial(){
+  tutActive=false;
+  G("tutorial").classList.add("hide");
+  window.removeEventListener("resize", positionTut);
+  window.removeEventListener("scroll", positionTut, true);
+  try{ localStorage.setItem(TUT_KEY,"1"); }catch(_){}
+}
+function tutNext(){ if(tutIdx>=tutSteps.length-1) endTutorial(); else { tutIdx++; showTutStep(); } }
+function tutPrev(){ if(tutIdx>0){ tutIdx--; showTutStep(); } }
+function maybeAutoTutorial(){
+  let seen=false; try{ seen=localStorage.getItem(TUT_KEY)==="1"; }catch(_){}
+  if(seen || tutActive) return;
+  if(connectedIds().length===0) return;
+  setTimeout(()=>{ if(currentStep==="control") startTutorial(); }, 450);
+}
+G("tutorial").addEventListener("click", e=>{
+  if(e.target.closest("#tutCard") || e.target.closest("#tutSkip")) return;
+  tutNext();
+});
+G("tutNext").onclick=tutNext;
+G("tutPrev").onclick=tutPrev;
+G("tutSkip").onclick=endTutorial;
+G("btnReplayTut").onclick=()=>{ if(currentStep==="control") startTutorial(); };
+
+// ============================================================
+//  ARM SELECTION
+// ============================================================
+const ARM_KEY="motor.arm";
+function currentArm(){ try{ return localStorage.getItem(ARM_KEY); }catch(_){ return null; } }
+function applyArmUI(){
+  const a=currentArm();
+  G("armIcon").innerHTML = a==="aloha" ? "&#129302;" : "&#129482;";
+  G("armName").textContent = a==="aloha" ? "Aloha" : (a==="openarm" ? "OpenArm" : "choose arm");
+  const sub=G("calSub");
+  if(sub) sub.innerHTML = (a==="aloha")
+    ? "For each motor, press <b>Calibrate</b>, drive it to both hardstops with the slider and mark them. The joint then centers itself and sets zero. Keep clear and be ready to <b>E-STOP</b>."
+    : "Calibration finds each joint's range of motion and sets its zero point. It's required once before you can control the motors. Keep the area clear &mdash; the joints will move on their own. You can hit <b>E-STOP</b> at any time.";
+}
+function showArmSelect(){ G("armSelect").classList.remove("hide"); G("wizard").classList.add("hide"); }
+function showWizard(){ G("armSelect").classList.add("hide"); G("wizard").classList.remove("hide"); goStep(currentStep||"connect"); }
+function setArm(a){ try{ localStorage.setItem(ARM_KEY,a); }catch(_){} applyArmUI(); }
+document.querySelectorAll(".arm-opt").forEach(b=>b.onclick=()=>{ setArm(b.dataset.arm); showWizard(); });
+G("armPill").onclick=()=>{ closeManual(); showArmSelect(); };
+
+// ============================================================
+//  ALOHA MANUAL CALIBRATION PANEL
+// ============================================================
+let mc={id:null, rear:null, front:null, jogging:false, busy:false};
+function updateMcButtons(){
+  const both=mc.rear!=null && mc.front!=null;
+  const span=both?Math.abs(mc.front-mc.rear):0;
+  G("mcConfirm").disabled = !both || span<0.1 || mc.busy;
+  ["mcEnable","mcRelease","mcMarkRear","mcMarkFront","mcClose"].forEach(id=>G(id).disabled=mc.busy);
+  G("mcJog").disabled=mc.busy;
+}
+async function openManual(id){
+  // clear any saved calibration so the joint can reach its true hardstops
+  await post("/api/clear_calibration",{motor_id:id});
+  mc={id, rear:null, front:null, jogging:false, busy:false};
+  const m=motorsById[id], pmax=(m&&m.limits&&m.limits.pmax)||12.5, p=m?m.state.pos:0;
+  G("mcName").textContent=motorName(id);
+  G("mcJog").min=-pmax; G("mcJog").max=pmax; G("mcJog").value=p;
+  G("mcJogMin").textContent=(-pmax).toFixed(1); G("mcJogMax").textContent=pmax.toFixed(1);
+  G("mcPos").textContent=(+p).toFixed(3);
+  G("mcRearVal").textContent="not marked"; G("mcFrontVal").textContent="not marked";
+  G("mcRearBox").classList.remove("marked"); G("mcFrontBox").classList.remove("marked");
+  flash(G("mcCmd"),"");
+  updateMcButtons();
+  G("manualPanel").classList.remove("hide");
+  G("manualPanel").scrollIntoView({block:"start", behavior:"smooth"});
+}
+function closeManual(){
+  if(mc.id!=null) post("/api/disable",{motor_id:mc.id});
+  G("manualPanel").classList.add("hide");
+  mc={id:null, rear:null, front:null, jogging:false, busy:false};
+}
+G("mcClose").onclick=closeManual;
+G("mcEnable").onclick=async()=>{
+  if(mc.id==null) return;
+  const m=motorsById[mc.id], p=m?m.state.pos:0;
+  G("mcJog").value=p;
+  await post("/api/target",{motor_id:mc.id, pos:p, kp:defaultGains.kp, kd:defaultGains.kd});
+  const r=await post("/api/enable",{motor_id:mc.id});
+  flash(G("mcCmd"), r.ok?"enabled — use the slider to move the joint":"enable failed: "+r.error, !r.ok);
+};
+G("mcRelease").onclick=async()=>{ if(mc.id==null) return; await post("/api/disable",{motor_id:mc.id}); flash(G("mcCmd"),"released (joint is limp)"); };
+G("mcJog").addEventListener("input",()=>{
+  if(mc.id==null) return;
+  mc.jogging=true; clearTimeout(mc._jt); mc._jt=setTimeout(()=>mc.jogging=false,1200);
+  post("/api/target",{motor_id:mc.id, pos:parseFloat(G("mcJog").value)});
+});
+G("mcMarkRear").onclick=()=>{
+  const m=motorsById[mc.id]; if(!m) return;
+  mc.rear=m.state.pos; G("mcRearVal").textContent=mc.rear.toFixed(3)+" rad"; G("mcRearBox").classList.add("marked");
+  flash(G("mcCmd"),`rear stop marked at ${mc.rear.toFixed(3)} rad`); updateMcButtons();
+};
+G("mcMarkFront").onclick=()=>{
+  const m=motorsById[mc.id]; if(!m) return;
+  mc.front=m.state.pos; G("mcFrontVal").textContent=mc.front.toFixed(3)+" rad"; G("mcFrontBox").classList.add("marked");
+  flash(G("mcCmd"),`front stop marked at ${mc.front.toFixed(3)} rad`); updateMcButtons();
+};
+G("mcConfirm").onclick=async()=>{
+  if(mc.rear==null||mc.front==null||mc.id==null) return;
+  if(!confirm(`Confirm calibration for ${motorName(mc.id)}?\n\nThe joint will move to the midpoint between your two marks and set zero there. Keep clear and be ready to E-STOP.`)) return;
+  mc.busy=true; updateMcButtons(); flash(G("mcCmd"),"centering and zeroing…");
+  const r=await post("/api/manual_calibrate_center",{motor_id:mc.id, low_stop:mc.rear, high_stop:mc.front});
+  if(!r.ok){ mc.busy=false; updateMcButtons(); flash(G("mcCmd"),"calibration failed: "+r.error,true); return; }
+  flash(G("mcCmd"),"calibrated ✓");
+  setTimeout(closeManual, 600);
+};
+function updateMcLive(){
+  if(mc.id==null || G("manualPanel").classList.contains("hide")) return;
+  const m=motorsById[mc.id];
+  if(!m){ closeManual(); return; }
+  G("mcPos").textContent=m.state.pos.toFixed(3);
+  if(!mc.jogging && document.activeElement!==G("mcJog")) G("mcJog").value=m.state.pos;
+  const active=!!(m.calibration&&m.calibration.active);
+  if(active!==mc.busy){ mc.busy=active; updateMcButtons(); }
+  if(active) flash(G("mcCmd"),"calibrating: "+(m.calibration.message||m.calibration.phase));
+}
+
+// ============================================================
+//  LIVE RENDER (SSE)
+// ============================================================
+function render(status){
+  latest=status; const motors=status.motors||[];
+  motorsById={}; motors.forEach(m=>motorsById[m.motor_id]=m);
+
+  // control cards
+  const ids=new Set(motors.map(m=>m.motor_id));
+  Object.keys(cards).forEach(k=>{if(!ids.has(parseInt(k))) removeCard(parseInt(k));});
+  let anyOnline=false;
+  motors.forEach(m=>{ const ctx=cards[m.motor_id]||makeCard(m.motor_id); ctx.update(m); if(m.state.online) anyOnline=true; });
+
+  // step surfaces
+  updateScanRowStates();
+  renderCalList(motors);
+  updateCalStep();
+  updateMcLive();
+  updateGroupPanel(motors);
+  if(currentStep==="control") applyView();
+  updateStepper();
+
+  // continue buttons availability
+  document.getElementById("toCalibrate").disabled=connectedIds().length===0;
+
+  // header bus status
+  const anyConn=motors.length>0;
+  const dot=G("busDot"), txt=G("busTxt");
+  if(!anyConn){dot.className="dot";txt.textContent="no motors";}
+  else{dot.className="dot"+(anyOnline?" on":" warn");
+    txt.textContent=`${motors.length} motor${motors.length>1?'s':''} ${anyOnline?'· online':'· offline'}`;}
+}
+function connectSSE(){
+  const es=new EventSource("/api/stream");
+  es.onmessage=e=>{try{render(JSON.parse(e.data));}catch(_){}};
+  es.onerror=()=>{G("busTxt").textContent="reconnecting…";};
+}
+connectSSE();
+window.addEventListener("resize",()=>Object.values(cards).forEach(c=>c.node.querySelector(".m-plot")));
+updateStepper();
+
+// ---- arm init: show selection first time, otherwise go straight to the wizard ----
+if(currentArm()){ applyArmUI(); showWizard(); }
+else { applyArmUI(); showArmSelect(); }
+</script>
+</body>
+</html>
