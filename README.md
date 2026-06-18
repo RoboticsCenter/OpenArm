@@ -71,11 +71,14 @@ up, skip to [Section 5: Running the dashboard](#5-running-the-dashboard-every-da
 
 ### Step 3.1 — Open a terminal in this folder
 
+Clone the repository (or copy this folder onto the machine), then `cd` into it:
+
 ```bash
-cd /home/jerry-ubuntu/motor-test
+git clone https://github.com/RoboticsCenter/aloha-openarm.git
+cd aloha-openarm
 ```
 
-(Adjust the path to wherever this folder lives on your machine.)
+If you already have the folder, just `cd` into wherever it lives on your machine.
 
 ### Step 3.2 — Create the Python environment and install dependencies
 
