@@ -124,6 +124,17 @@ def api_disable():
     return _ok()
 
 
+@app.route("/api/activate", methods=["POST"])
+def api_activate():
+    # Make one arm/channel the live bus (the dual adapter drives one at a time).
+    body = request.get_json(silent=True) or {}
+    try:
+        st = service.activate(_chan(body))
+    except Exception as e:
+        return _err(e, 500)
+    return _ok(status=st)
+
+
 @app.route("/api/estop", methods=["POST"])
 def api_estop():
     body = request.get_json(silent=True) or {}

@@ -253,8 +253,14 @@ class MotorService:
         self.motors: "Dict[tuple, _MotorHandle]" = {}
         self._calibration_store = self._load_calibration_store()
 
-        # One device handle per CAN channel -- ONLY touched by the worker thread.
-        self._ctrls: "Dict[str, Controller]" = {}
+        # The DM-USB2FDCAN dual adapter only services ONE CAN channel at a time:
+        # opening a second controller while the first is open makes both talk to
+        # the same physical bus. So exactly one channel is "active" (open) at a
+        # time; switching arms tears the current bus down and opens the other.
+        # Motors on the inactive channel keep their config/calibration but have
+        # no live SDK handle until their channel is activated again.
+        self._ctrl: Optional[Controller] = None
+        self._active_channel: Optional[str] = None
 
         self._q: "queue.Queue[_Cmd]" = queue.Queue()
         self._stop = False
@@ -282,7 +288,16 @@ class MotorService:
         return f"{channel}:{motor_id}"
 
     def _ctrl_for(self, mh: "_MotorHandle") -> Optional[Controller]:
-        return self._ctrls.get(str(mh.channel))
+        if self._ctrl is not None and str(mh.channel) == str(self._active_channel):
+            return self._ctrl
+        return None
+
+    def _channels_present(self) -> List[str]:
+        seen: List[str] = []
+        for ch, _ in sorted(self.motors.keys()):
+            if ch not in seen:
+                seen.append(ch)
+        return seen
 
     def _require(self, channel, motor_id) -> _MotorHandle:
         mh = self.motors.get(self._key(channel, motor_id))
@@ -312,8 +327,10 @@ class MotorService:
 
     def _apply_saved_calibration(self, mh: _MotorHandle):
         saved = self._calibration_store.get(self._cal_key(mh.channel, mh.motor_id))
-        if not isinstance(saved, dict):
-            # Fall back to a legacy single-arm key (plain motor id).
+        if not isinstance(saved, dict) and str(mh.channel) == str(self.channel):
+            # Fall back to a legacy single-arm key (plain motor id) only on the
+            # primary channel, so a second arm never inherits the first arm's
+            # old single-arm calibration.
             saved = self._calibration_store.get(str(mh.motor_id))
         if not isinstance(saved, dict):
             return
@@ -353,16 +370,18 @@ class MotorService:
     def _forget_calibration(self, mh: _MotorHandle):
         changed = self._calibration_store.pop(
             self._cal_key(mh.channel, mh.motor_id), None) is not None
-        # Also drop any legacy single-arm key.
-        changed = (self._calibration_store.pop(str(mh.motor_id), None)
-                   is not None) or changed
+        # Also drop any legacy single-arm key, but only on the primary channel
+        # (the legacy key belongs to the original single-arm setup).
+        if str(mh.channel) == str(self.channel):
+            changed = (self._calibration_store.pop(str(mh.motor_id), None)
+                       is not None) or changed
         if changed:
             self._write_calibration_store()
 
     def _saved_span(self, mh: _MotorHandle) -> Optional[float]:
         """Return the saved hardstop-to-hardstop span (rad) for a motor, or None."""
         rec = self._calibration_store.get(self._cal_key(mh.channel, mh.motor_id))
-        if not isinstance(rec, dict):
+        if not isinstance(rec, dict) and str(mh.channel) == str(self.channel):
             rec = self._calibration_store.get(str(mh.motor_id))
         if not isinstance(rec, dict):
             return None
@@ -409,12 +428,12 @@ class MotorService:
         self._teardown()
 
     def _tick(self):
-        if not self._ctrls or not self.motors:
+        if self._ctrl is None or not self.motors:
             return
-        # Snapshot per-motor intent under the lock.
+        # Only motors on the currently-active channel have a live SDK handle.
         with self.lock:
             plan = [(mh, mh.enabled, mh.estopped, mh.mode, dict(mh.sp), mh._mode_applied)
-                    for mh in self.motors.values()]
+                    for mh in self.motors.values() if mh._motor is not None]
 
         for mh, enabled, estopped, mode, sp, mode_applied in plan:
             if mh._motor is None:
@@ -455,16 +474,13 @@ class MotorService:
                 with self.lock:
                     mh.fault = f"command error: {e}"
 
-        # Drain feedback frames on every channel, then read each motor's state.
-        counts: Dict[str, int] = {}
-        for mh in self.motors.values():
-            counts[str(mh.channel)] = counts.get(str(mh.channel), 0) + 1
-        for ch, ctrl in self._ctrls.items():
-            for _ in range(counts.get(ch, 0) + 2):
-                try:
-                    ctrl.poll_feedback_once()
-                except Exception:
-                    break
+        # Drain feedback frames on the active channel, then read each motor.
+        active = [mh for mh in self.motors.values() if mh._motor is not None]
+        for _ in range(len(active) + 2):
+            try:
+                self._ctrl.poll_feedback_once()
+            except Exception:
+                break
         for mh in list(self.motors.values()):
             if mh._motor is None:
                 continue
@@ -531,6 +547,8 @@ class MotorService:
     # Device operations (executed on the worker thread)
     # ------------------------------------------------------------------ #
     def _teardown(self):
+        # Closing the bus drops every live motor: cut their torque and mark them
+        # disabled so reactivating a channel never silently re-energizes a joint.
         for mh in self.motors.values():
             if mh._motor is not None:
                 try:
@@ -542,40 +560,58 @@ class MotorService:
                 except Exception:
                     pass
                 mh._motor = None
-        for ctrl in self._ctrls.values():
+            with self.lock:
+                mh.enabled = False
+                mh.max_power = False
+                mh._mode_applied = None
+        if self._ctrl is not None:
             try:
-                ctrl.close_bus()
+                self._ctrl.close_bus()
             except Exception:
                 pass
             try:
-                ctrl.close()
+                self._ctrl.close()
             except Exception:
                 pass
-        self._ctrls = {}
+            self._ctrl = None
 
     def _rebuild(self):
         """(Re)open the shared controller and re-add every known motor.
 
         The motorbridge model is fixed at add-time and re-adding a live id on a
         running controller fails, so any roster/model change goes through a full
-        clean rebuild of the bus. One controller is opened per CAN channel in
-        use so both arms of a dual adapter can run at once.
+        clean rebuild of the bus. Only the active channel is opened (the adapter
+        cannot drive both channels at once); motors on other channels stay
+        registered but without a live SDK handle until their channel is made
+        active.
         """
         self._teardown()
         if not self.motors:
+            self._active_channel = None
             return
+        present = self._channels_present()
+        if self._active_channel is None or str(self._active_channel) not in present:
+            self._active_channel = present[0]
+        ch = str(self._active_channel)
+        self._ctrl = Controller.from_dm_device(self.device_type, ch)
         for mh in self.motors.values():
-            ch = str(mh.channel)
-            ctrl = self._ctrls.get(ch)
-            if ctrl is None:
-                ctrl = Controller.from_dm_device(self.device_type, ch)
-                self._ctrls[ch] = ctrl
-            mh._motor = ctrl.add_damiao_motor(
+            if str(mh.channel) != ch:
+                mh._motor = None
+                continue
+            mh._motor = self._ctrl.add_damiao_motor(
                 mh.motor_id, mh.feedback_id, mh.model)
             mh._mode_applied = None
             # The physical mode register state is unknown after a rebuild, so
             # force the next MIT enable to re-assert it.
             mh._mode_register = None
+
+    def _activate(self, channel):
+        """Make ``channel`` the live bus (no-op if already active)."""
+        ch = str(channel)
+        if ch == str(self._active_channel) and self._ctrl is not None:
+            return
+        self._active_channel = ch
+        self._rebuild()
 
     def _autodetect(self, mh: _MotorHandle) -> bool:
         """Read PMAX/VMAX/TMAX registers off a motor and pick the best model.
@@ -615,6 +651,8 @@ class MotorService:
                 mh.pos_min = None
                 mh.pos_max = None
 
+        # Talking to the new motor (autodetect, calibration) needs its bus live.
+        self._active_channel = ch
         self._rebuild()
         if autodetect:
             if self._autodetect(mh):
@@ -751,6 +789,7 @@ class MotorService:
 
     def _do_enable(self, channel, motor_id):
         mh = self._require(channel, motor_id)
+        self._activate(channel)
         if mh._motor is None:
             raise RuntimeError("not connected")
         mh._motor.disable()
@@ -777,6 +816,7 @@ class MotorService:
         by hand / against a stop), define the current position as zero, then
         read it back to verify. Leaves the motor disabled."""
         mh = self._require(channel, motor_id)
+        self._activate(channel)
         ctrl = self._ctrl_for(mh)
         if mh._motor is None:
             raise RuntimeError("not connected")
@@ -814,6 +854,7 @@ class MotorService:
         the current position is close to that midpoint.
         """
         mh = self._require(channel, motor_id)
+        self._activate(channel)
         if mh._motor is None:
             raise RuntimeError("not connected")
         low = float(low_stop)
@@ -884,6 +925,7 @@ class MotorService:
         the flow used for arms whose hardstops are set by hand (e.g. Aloha).
         """
         mh = self._require(channel, motor_id)
+        self._activate(channel)
         if mh._motor is None:
             raise RuntimeError("not connected")
         low = float(low_stop)
@@ -1270,6 +1312,7 @@ class MotorService:
     def _do_auto_calibrate_one(self, channel, motor_id, speed=CAL_SPEED_RAD_S,
                                max_s=CAL_MAX_SWEEP_S):
         mh = self._require(channel, motor_id)
+        self._activate(channel)
         if mh._motor is None:
             raise RuntimeError("not connected")
         profile = CAL_JOINT_PROFILES.get(int(motor_id), {})
@@ -1402,34 +1445,41 @@ class MotorService:
     def _do_return_home(self, channel=None, motor_id=None):
         single = motor_id is not None
         if single:
-            targets = [self._require(channel, motor_id)]
+            chans = [str(channel)]
         elif channel is not None:
-            targets = [self.motors[k] for k in sorted(self.motors)
-                       if k[0] == str(channel)]
+            chans = [str(channel)]
         else:
-            targets = [self.motors[k] for k in sorted(self.motors)]
+            # Home every arm, one bus at a time.
+            chans = self._channels_present()
         homed = []
-        for mh in targets:
-            if mh._motor is None:
-                continue
-            pmax, _, _ = mh.limits
-            calibrated = mh.pos_min is not None and mh.pos_max is not None
-            if not calibrated and not single:
-                continue
-            with self.lock:
-                mh.mode = "mit"
-                mh.max_power = False
-                mh.estopped = False
-                mh.sp.update(
-                    pos=_clamp(0.0, -pmax if mh.pos_min is None else mh.pos_min,
-                               pmax if mh.pos_max is None else mh.pos_max),
-                    vel=0.0,
-                    kp=max(float(mh.sp.get("kp", 0.0)), CAL_MIT_KP),
-                    kd=max(float(mh.sp.get("kd", 0.0)), CAL_MIT_KD),
-                    tau=0.0,
-                )
-            self._do_enable(mh.channel, mh.motor_id)
-            homed.append({"channel": mh.channel, "motor_id": mh.motor_id})
+        for ch in chans:
+            self._activate(ch)
+            for k in sorted(self.motors):
+                mh = self.motors[k]
+                if str(mh.channel) != ch:
+                    continue
+                if single and mh.motor_id != int(motor_id):
+                    continue
+                if mh._motor is None:
+                    continue
+                pmax, _, _ = mh.limits
+                calibrated = mh.pos_min is not None and mh.pos_max is not None
+                if not calibrated and not single:
+                    continue
+                with self.lock:
+                    mh.mode = "mit"
+                    mh.max_power = False
+                    mh.estopped = False
+                    mh.sp.update(
+                        pos=_clamp(0.0, -pmax if mh.pos_min is None else mh.pos_min,
+                                   pmax if mh.pos_max is None else mh.pos_max),
+                        vel=0.0,
+                        kp=max(float(mh.sp.get("kp", 0.0)), CAL_MIT_KP),
+                        kd=max(float(mh.sp.get("kd", 0.0)), CAL_MIT_KD),
+                        tau=0.0,
+                    )
+                self._do_enable(mh.channel, mh.motor_id)
+                homed.append({"channel": mh.channel, "motor_id": mh.motor_id})
         return {"homed": homed}
 
     # ------------------------------------------------------------------ #
@@ -1513,6 +1563,17 @@ class MotorService:
             return results
         timeout = (float(max_s) * 2.0 + 90.0) * max(1, len(self.motors))
         return self._submit(run, timeout=timeout)
+
+    def activate(self, channel):
+        """Make ``channel`` the live arm/bus (the adapter drives one at a time).
+        No-op if there are no motors on that channel."""
+        ch = str(channel)
+        def run():
+            if ch not in self._channels_present():
+                return self.status()
+            self._activate(ch)
+            return self.status()
+        return self._submit(run, timeout=20.0)
 
     def return_home(self, channel=None, motor_id=None):
         return self._submit(
@@ -1606,6 +1667,7 @@ class MotorService:
             return {
                 "device_type": self.device_type,
                 "channel": self.channel,
+                "active_channel": self._active_channel,
                 "fault": self.fault,
                 "connected": bool(self.motors),
                 "motors": motors,

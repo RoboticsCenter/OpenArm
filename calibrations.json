@@ -1,4 +1,28 @@
 {
+  "0:1": {
+    "channel": "0",
+    "feedback_id": 17,
+    "method": "auto",
+    "model": "8009",
+    "motor_id": 1,
+    "pos_max": 1.18582,
+    "pos_min": -1.18582,
+    "result": {
+      "center": -0.06752,
+      "high_stop": 1.1183,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -1.25334,
+      "ok": true,
+      "pos_max": 1.18582,
+      "pos_min": -1.18582,
+      "residual_pos": -0.02537,
+      "span": 2.37163,
+      "speed": 1.25
+    },
+    "saved_at": 1781825556.360711
+  },
   "0:3": {
     "channel": "0",
     "feedback_id": 19,
@@ -23,6 +47,126 @@
     },
     "saved_at": 1781823945.0674105
   },
+  "0:4": {
+    "channel": "0",
+    "feedback_id": 20,
+    "method": "j4_back_saved_front",
+    "model": "4340_v20",
+    "motor_id": 4,
+    "pos_max": 0.96952,
+    "pos_min": -0.96952,
+    "result": {
+      "center": 0.07057,
+      "high_stop": 1.04009,
+      "kd": 0.5,
+      "kp": 12.0,
+      "lead": 0.25,
+      "low_stop": -0.89895,
+      "ok": true,
+      "pos_max": 0.96952,
+      "pos_min": -0.96952,
+      "residual_pos": -0.00019,
+      "span": 1.93904,
+      "speed": 1.5
+    },
+    "saved_at": 1781825626.0492554
+  },
+  "0:5": {
+    "channel": "0",
+    "feedback_id": 21,
+    "method": "auto",
+    "model": "4310P",
+    "motor_id": 5,
+    "pos_max": 1.59018,
+    "pos_min": -1.59018,
+    "result": {
+      "center": -0.02136,
+      "high_stop": 1.56882,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -1.61154,
+      "ok": true,
+      "pos_max": 1.59018,
+      "pos_min": -1.59018,
+      "residual_pos": -0.00019,
+      "span": 3.18036,
+      "speed": 1.25
+    },
+    "saved_at": 1781826383.0075955
+  },
+  "0:6": {
+    "channel": "0",
+    "feedback_id": 22,
+    "method": "auto",
+    "model": "4310P",
+    "motor_id": 6,
+    "pos_max": 0.79633,
+    "pos_min": -0.79633,
+    "result": {
+      "center": -0.00763,
+      "high_stop": 0.7887,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -0.80396,
+      "ok": true,
+      "pos_max": 0.79633,
+      "pos_min": -0.79633,
+      "residual_pos": -0.00019,
+      "span": 1.59266,
+      "speed": 1.25
+    },
+    "saved_at": 1781825662.7767737
+  },
+  "0:7": {
+    "channel": "0",
+    "feedback_id": 23,
+    "method": "auto",
+    "model": "4310P",
+    "motor_id": 7,
+    "pos_max": 1.29969,
+    "pos_min": -1.29969,
+    "result": {
+      "center": -0.01812,
+      "high_stop": 1.28157,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -1.31781,
+      "ok": true,
+      "pos_max": 1.29969,
+      "pos_min": -1.29969,
+      "residual_pos": 0.00019,
+      "span": 2.59937,
+      "speed": 1.25
+    },
+    "saved_at": 1781826411.5557528
+  },
+  "0:8": {
+    "channel": "0",
+    "feedback_id": 24,
+    "method": "auto",
+    "model": "4310P",
+    "motor_id": 8,
+    "pos_max": 0.56554,
+    "pos_min": -0.56554,
+    "result": {
+      "center": -0.03128,
+      "high_stop": 0.53426,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -0.59682,
+      "ok": true,
+      "pos_max": 0.56554,
+      "pos_min": -0.56554,
+      "residual_pos": -0.00019,
+      "span": 1.13108,
+      "speed": 1.25
+    },
+    "saved_at": 1781826509.1833236
+  },
   "1": {
     "feedback_id": 17,
     "method": "auto",
@@ -45,6 +189,30 @@
       "speed": 1.25
     },
     "saved_at": 1781824376.1372905
+  },
+  "1:1": {
+    "channel": "1",
+    "feedback_id": 17,
+    "method": "auto",
+    "model": "4310",
+    "motor_id": 1,
+    "pos_max": 0.87606,
+    "pos_min": -0.87606,
+    "result": {
+      "center": 0.03281,
+      "high_stop": 0.90887,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -0.84325,
+      "ok": true,
+      "pos_max": 0.87606,
+      "pos_min": -0.87606,
+      "residual_pos": -0.00019,
+      "span": 1.75212,
+      "speed": 1.25
+    },
+    "saved_at": 1781825574.1808982
   },
   "1:3": {
     "channel": "1",
@@ -69,6 +237,126 @@
       "speed": 1.0
     },
     "saved_at": 1781823945.097436
+  },
+  "1:4": {
+    "channel": "1",
+    "feedback_id": 20,
+    "method": "j4_back_saved_front",
+    "model": "4310",
+    "motor_id": 4,
+    "pos_max": 0.96952,
+    "pos_min": -0.96952,
+    "result": {
+      "center": 0.07019,
+      "high_stop": 1.03971,
+      "kd": 0.5,
+      "kp": 12.0,
+      "lead": 0.25,
+      "low_stop": -0.89933,
+      "ok": true,
+      "pos_max": 0.96952,
+      "pos_min": -0.96952,
+      "residual_pos": -0.00019,
+      "span": 1.93904,
+      "speed": 1.5
+    },
+    "saved_at": 1781825633.0472872
+  },
+  "1:5": {
+    "channel": "1",
+    "feedback_id": 21,
+    "method": "auto",
+    "model": "4310P",
+    "motor_id": 5,
+    "pos_max": 1.58408,
+    "pos_min": -1.58408,
+    "result": {
+      "center": -0.01869,
+      "high_stop": 1.56538,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -1.60277,
+      "ok": true,
+      "pos_max": 1.58408,
+      "pos_min": -1.58408,
+      "residual_pos": -0.00019,
+      "span": 3.16815,
+      "speed": 1.25
+    },
+    "saved_at": 1781826394.5232172
+  },
+  "1:6": {
+    "channel": "1",
+    "feedback_id": 22,
+    "method": "auto",
+    "model": "4310",
+    "motor_id": 6,
+    "pos_max": 0.79633,
+    "pos_min": -0.79633,
+    "result": {
+      "center": -0.02365,
+      "high_stop": 0.77268,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -0.81998,
+      "ok": true,
+      "pos_max": 0.79633,
+      "pos_min": -0.79633,
+      "residual_pos": -0.00019,
+      "span": 1.59266,
+      "speed": 1.25
+    },
+    "saved_at": 1781825672.6802566
+  },
+  "1:7": {
+    "channel": "1",
+    "feedback_id": 23,
+    "method": "auto",
+    "model": "4310P",
+    "motor_id": 7,
+    "pos_max": 1.29301,
+    "pos_min": -1.29301,
+    "result": {
+      "center": -0.01984,
+      "high_stop": 1.27317,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -1.31285,
+      "ok": true,
+      "pos_max": 1.29301,
+      "pos_min": -1.29301,
+      "residual_pos": 0.00019,
+      "span": 2.58602,
+      "speed": 1.25
+    },
+    "saved_at": 1781826422.956192
+  },
+  "1:8": {
+    "channel": "1",
+    "feedback_id": 24,
+    "method": "auto",
+    "model": "4310P",
+    "motor_id": 8,
+    "pos_max": 0.59358,
+    "pos_min": -0.59358,
+    "result": {
+      "center": -0.02537,
+      "high_stop": 0.56821,
+      "kd": 0.45,
+      "kp": 10.0,
+      "lead": 0.18,
+      "low_stop": -0.61894,
+      "ok": true,
+      "pos_max": 0.59358,
+      "pos_min": -0.59358,
+      "residual_pos": -0.00019,
+      "span": 1.18715,
+      "speed": 1.25
+    },
+    "saved_at": 1781826517.492823
   },
   "3": {
     "feedback_id": 19,
