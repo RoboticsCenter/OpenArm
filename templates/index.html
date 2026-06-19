@@ -38,6 +38,7 @@
   button:disabled{opacity:.4;cursor:not-allowed}
   .btn-accent{background:var(--accent);border-color:transparent}
   .btn-good{background:var(--good);border-color:transparent;color:#04261a}
+  .btn-warn{background:var(--warn);border-color:transparent;color:#3a2600}
   .btn-ghost{background:transparent}
   .btn-estop{background:var(--bad);border-color:transparent;font-size:14px;padding:10px 18px}
   /* "engaged" = the state this button represents is currently active */
@@ -62,11 +63,32 @@
   .fault{color:var(--bad)}
   .badge{font-size:11px;padding:3px 8px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);color:var(--muted)}
   .motorgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:20px}
+  .motor-card{transition:border-color .15s,transform .15s}
+  .motor-card:hover{border-color:#36425e}
+  /* the primary "Move joint" control gets a subtle frame so it reads as the
+     main thing you interact with on each card */
+  .motor-card .ctl[data-for="pos"]{background:var(--panel2);border:1px solid var(--line);
+        border-radius:12px;padding:13px 15px 15px;margin-top:4px}
+  .motor-card .ctl[data-for="pos"]>label{margin-top:0}
+  .motor-card .powerbar button{padding:12px 14px}
   .mhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:10px}
   .mhead .title{font-size:16px;font-weight:700}
   .mhead .title small{color:var(--muted);font-weight:500;font-size:12px;margin-left:6px}
   .powerbar{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
   .powerbar3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:10px 0}
+
+  /* ---- control action bar (top of the Control step) ---- */
+  .actionbar{background:linear-gradient(160deg,var(--panel2),var(--panel));border:1px solid var(--line);
+        border-radius:16px;padding:18px 20px;box-shadow:var(--shadow)}
+  .actionbar-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+  .actionbar-title{font-size:17px;font-weight:700;letter-spacing:.2px}
+  .actionbar-sub{font-size:13px;color:var(--muted);margin-top:3px}
+  .actionbar-btns{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:680px){.actionbar-btns{grid-template-columns:1fr}}
+  .btn-action{font-size:15px;font-weight:650;padding:15px 16px;display:flex;align-items:center;justify-content:center;gap:9px}
+  .btn-action .ico{font-size:17px;line-height:1;display:inline-flex}
+  .actionbar-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;flex-wrap:wrap}
+  .actionbar-foot .datatoggle{margin:0}
   .switch{position:relative;width:54px;height:28px;flex:0 0 auto}
   .empty{text-align:center;color:var(--muted);padding:50px 20px}
   .num-inline{width:84px;text-align:center;padding:6px 8px}
@@ -348,19 +370,25 @@
     </div>
 
     <!-- Top actions for the active arm -->
-    <div id="indivActions" class="card hide" style="border-color:var(--accent)">
-      <div class="mhead">
-        <div class="title">Controls<span id="indivTitleArm"></span> <small>enable or home this arm's motors</small></div>
+    <div id="indivActions" class="actionbar hide">
+      <div class="actionbar-head">
+        <div>
+          <div class="actionbar-title">Controls<span id="indivTitleArm"></span></div>
+          <div class="actionbar-sub">Power on, home, or release this arm's motors</div>
+        </div>
         <span class="pill"><span id="indivDot" class="dot"></span><span id="indivCount">0</span> motors</span>
       </div>
-      <div class="powerbar">
-        <button id="indivEnable" class="btn-good">Enable All</button>
-        <button id="indivHome" class="btn-accent">Return Home</button>
+      <div class="actionbar-btns">
+        <button id="indivEnable" class="btn-good btn-action"><span class="ico">&#9211;</span>Enable All</button>
+        <button id="indivHome" class="btn-accent btn-action"><span class="ico">&#8962;</span>Return Home</button>
+        <button id="indivDisable" class="btn-warn btn-action"><span class="ico">&#9208;</span>Disable All</button>
       </div>
-      <label class="datatoggle" style="margin-top:10px" title="Show each motor's live position, velocity, torque, temperatures and graph">
-        <input type="checkbox" id="showLiveData"> Show live motor data
-      </label>
-      <div id="indivCmd" class="statusline"></div>
+      <div class="actionbar-foot">
+        <label class="datatoggle" title="Show each motor's live position, velocity, torque, temperatures and graph">
+          <input type="checkbox" id="showLiveData"> Show live motor data
+        </label>
+        <div id="indivCmd" class="statusline" style="margin:0"></div>
+      </div>
     </div>
 
     <!-- Per-motor cards -->
@@ -760,8 +788,9 @@ let _armSideSig=null;
 function renderArmSides(){
   const panel=G("armSidePanel"), list=G("armSideList");
   const present=channelsPresent();
-  // Side only affects the OpenArm auto-sweep; not relevant for Aloha.
-  const show = currentArm()!=="aloha" && present.length>=1;
+  // Arm side only mattered for the side-dependent auto sweep of joint 2. Joint 2
+  // is now calibrated by hand, so no joint needs a side and this panel is hidden.
+  const show = currentArm()!=="aloha" && armsNeedingSide().length>0;
   panel.classList.toggle("hide", !show);
   if(!show) return;
   const sig=present.join(",");
@@ -792,14 +821,10 @@ function renderArmSides(){
     else st.textContent="optional (no joint 2 on this arm)";
   });
 }
-// Arms that include the side-dependent joint (joint 2) MUST have their side set
-// before calibration, otherwise joint 2 would sweep into the body on a right arm.
-function armsNeedingSide(){
-  if(currentArm()==="aloha") return [];
-  return channelsPresent().filter(ch=>
-    connectedUids().some(u=>{const s=splitUid(u);
-      return String(s.channel)===String(ch) && s.motor_id===2;}));
-}
+// No joints are side-dependent anymore: joint 2 (the only one that used to be)
+// is calibrated manually and rests at its natural hanging position, so the
+// arm orientation step is no longer required before calibrating.
+function armsNeedingSide(){ return []; }
 function sideSet(ch){ return armSides[ch]==="left"||armSides[ch]==="right"; }
 function sidesReady(){ return armsNeedingSide().every(sideSet); }
 document.getElementById("armSideList").addEventListener("click", async e=>{
@@ -847,7 +872,7 @@ function renderCalListJoints(){
       row.querySelector(".cal-recal").onclick=async()=>{
         if(calibrating) return;
         const arms=uidsForJoint(j).length;
-        if(!confirm(`Calibrate joint ${j}${arms>1?` on all ${arms} arms`:''}?\n\nThe joint will drive to both hardstops, then zero at the midpoint. Keep clear and be ready to E-STOP.`)) return;
+        if(!confirm(`Calibrate joint ${j}${arms>1?` on all ${arms} arms`:''}?\n\nThe joint will drive to both hardstops, then set its zero. Keep clear and be ready to E-STOP.`)) return;
         await calibrateJoints([j], true);
       };
       row.querySelector(".cal-remove").onclick=async()=>{
@@ -1002,11 +1027,6 @@ async function runAutoCalibrate(channel, motorId){
 // Calibrate each joint across every arm that has it (one joint at a time).
 async function calibrateJoints(joints, returnHome){
   if(!joints.length || calibrating) return;
-  if(!sidesReady()){
-    flash(document.getElementById("calCmd"),
-      "Set each arm's side (Left / Right) in Arm orientation first.",true);
-    return;
-  }
   calibrating=true; updateCalStep();
   const cmd=document.getElementById("calCmd");
   for(const j of joints){
@@ -1026,7 +1046,7 @@ async function calibrateJoints(joints, returnHome){
 document.getElementById("btnCalAll").onclick=async()=>{
   const uncal=connectedJoints().filter(j=>!jointCalibrated(j));
   if(!uncal.length) return;
-  if(!confirm("Calibrate every joint that still needs it?\n\nEach joint moves to its hardstops one at a time (on every arm), then zeroes at the midpoint. Keep clear and be ready to E-STOP.")) return;
+  if(!confirm("Calibrate every joint that still needs it?\n\nEach joint moves to its hardstops one at a time (on every arm), then sets its zero. Keep clear and be ready to E-STOP.")) return;
   await calibrateJoints(uncal, true);
 };
 document.getElementById("btnRecalAll").onclick=async()=>{
@@ -1208,6 +1228,16 @@ async function returnArmHome(btn, cmd){
 }
 G("indivHome").onclick=()=>returnArmHome(G("indivHome"), G("indivCmd"));
 
+G("indivDisable").onclick=async()=>{
+  const btn=G("indivDisable");
+  btn.disabled=true; flash(G("indivCmd"),`disabling ${armLabel(activeChannel)} motors…`);
+  await broadcast("/api/disable");
+  btn.disabled=false;
+  // reflect the released state on each card's slider line right away
+  activeUids().forEach(u=>{const c=cards[u]; if(c) flash(c.node.querySelector(".m-cmd"),"disabled");});
+  flash(G("indivCmd"),`disabled ${armLabel(activeChannel)} ✓ (motors are limp)`);
+};
+
 // ---- arm tabs (which arm's panel is shown) ----
 // renderArmTabs runs on every status frame, so only rebuild the buttons when
 // the set of arms actually changes. Rebuilding the DOM each frame would destroy
@@ -1283,8 +1313,12 @@ function updateIndivActions(){
   // reflect live enable state on the button so it's obvious what's running
   const be=G("indivEnable");
   be.classList.toggle("engaged", allEnabled);
-  be.textContent = allEnabled ? "Enabled \u2713" : (anyEnabled ? "Enable Remaining" : "Enable All");
+  const enLabel = allEnabled ? "Enabled \u2713" : (anyEnabled ? "Enable Remaining" : "Enable All");
+  be.innerHTML = '<span class="ico">&#9211;</span>'+enLabel;
   be.disabled = allEnabled;
+  // Disable All is only useful while something is actually powered on.
+  const bd=G("indivDisable");
+  if(bd) bd.disabled = !anyEnabled;
 }
 
 // ---- gains preset (Kp / Kd) ----

@@ -119,17 +119,30 @@ CAL_J4_DEFAULT_SPAN_RAD = _env_float("CAL_J4_DEFAULT_SPAN_RAD", 2.18)
 # forward would just drive them into the arm body. For these joints we sweep
 # reverse only, set zero at the rear stop, take the forward extent from the
 # saved span (or the per-joint default below), and never center them.
+#
+# Joints 1 and 2 calibrate in BOTH directions like every other joint (find both
+# hardstops via a normal bidirectional sweep). They are NOT centered afterwards
+# (see CAL_HANG_ZERO_JOINTS). No joint is reverse-only or side-dependent.
 CAL_J1_DEFAULT_SPAN_RAD = _env_float("CAL_J1_DEFAULT_SPAN_RAD", 3.14159)
-CAL_REVERSE_ONLY_JOINTS = {1, 2}
-# Only these joints flip their sweep direction with arm handedness. Joint 1 is
-# NOT side-dependent -- it always sweeps reverse, exactly as before.
-CAL_SIDE_DEPENDENT_JOINTS = {2}
+CAL_REVERSE_ONLY_JOINTS = set()
+CAL_SIDE_DEPENDENT_JOINTS = set()
 CAL_REVERSE_ONLY_DEFAULT_SPAN = {
     1: CAL_J1_DEFAULT_SPAN_RAD,
     2: _env_float("CAL_J2_DEFAULT_SPAN_RAD", 3.14159),
 }
+# Joints that auto-find BOTH hardstops (a normal bidirectional sweep) but are
+# NOT centered afterwards. Instead the joint is released, allowed to fall to its
+# natural resting position, and zero is set THERE. Joints 1 and 2 work this way.
+CAL_HANG_ZERO_JOINTS = {1, 2}
+# How long to let a released joint settle before reading its natural resting
+# position during "hang" calibration (auto or manual), and the velocity below
+# which we consider it settled.
+CAL_HANG_SETTLE_S = _env_float("CAL_HANG_SETTLE_S", 1.5)
+CAL_HANG_SETTLE_VEL = _env_float("CAL_HANG_SETTLE_VEL", 0.05)
 # Joints whose "home" is no power (left limp) instead of being driven to zero.
-CAL_LIMP_HOME_JOINTS = {1}
+# Joints 1 and 2 rest at their natural hanging positions, so homing leaves them
+# limp rather than driving them to a center/zero.
+CAL_LIMP_HOME_JOINTS = {1, 2}
 CAL_PROGRESS_EPS_RAD = 0.01
 CAL_EFFORT_STAGE_SCALES = (1.0, 1.35, 1.75, 2.20)
 CAL_JOINT_PROFILES = {
@@ -1125,6 +1138,23 @@ class MotorService:
                 cal["saved_at"] = saved_at
             mh.calibration = cal
 
+    def _settle_rest_position(self, mh: _MotorHandle) -> float:
+        """Wait for a released joint to stop moving and return its resting
+        position. Assumes the joint has already been disabled (limp)."""
+        rest = None
+        deadline = time.time() + CAL_HANG_SETTLE_S
+        while time.time() < deadline:
+            self._raise_if_calibration_stopped(mh)
+            st = self._feedback_now(mh, polls=2, dwell=0.02)
+            if st is not None:
+                rest = float(st.pos)
+                if abs(float(st.vel)) < CAL_HANG_SETTLE_VEL:
+                    break
+            time.sleep(0.05)
+        if rest is None:
+            raise RuntimeError("could not read resting position")
+        return rest
+
     def _raise_if_calibration_stopped(self, mh: _MotorHandle):
         with self.lock:
             stopped = self._stop or mh.estopped
@@ -1435,6 +1465,7 @@ class MotorService:
                     f"(Kp {kp:.1f}, lead {lead:.2f})", error=None,
             result=None)
         is_reverse_only = int(motor_id) in CAL_REVERSE_ONLY_JOINTS
+        is_hang_zero = int(motor_id) in CAL_HANG_ZERO_JOINTS
         is_limp_home = int(motor_id) in CAL_LIMP_HOME_JOINTS
         is_j4 = int(motor_id) == 4
         side = self.get_arm_side(channel)
@@ -1496,11 +1527,18 @@ class MotorService:
             if span < CAL_MIN_SPAN_RAD:
                 raise RuntimeError(
                     f"hardstop span too small ({span:.3f} rad); check motion path")
-            pos_min = min(low, high) - center
-            pos_max = max(low, high) - center
             move_timeout = max(30.0, span / speed + 15.0)
             self._raise_if_calibration_stopped(mh)
-            if is_reverse_only:
+            if is_hang_zero:
+                # Found both hardstops, but don't center. Release the joint, let
+                # it fall to its natural resting position, and set zero THERE.
+                method = f"j{int(motor_id)}_auto_hang"
+                self._set_calibration(
+                    mh, active=True, phase="releasing",
+                    message="releasing joint to its natural resting position")
+                self._disable_after_calibration(mh)
+                center = self._settle_rest_position(mh)
+            elif is_reverse_only:
                 # No centering move: leave it sitting at the rear stop.
                 pass
             elif is_j4:
@@ -1524,6 +1562,11 @@ class MotorService:
 
             self._raise_if_calibration_stopped(mh)
             self._disable_after_calibration(mh)
+            # center is the zero location: midpoint for centered joints, the
+            # natural resting position for hang-zero joints, the rear stop for
+            # reverse-only joints.
+            pos_min = min(low, high) - center
+            pos_max = max(low, high) - center
             time.sleep(0.08)
             mh._motor.set_zero_position()
             time.sleep(0.08)
@@ -1554,11 +1597,17 @@ class MotorService:
                 mh.mode = "mit"
                 mh._mode_applied = None
             self._save_calibration(mh, result, method)
+            if is_hang_zero:
+                complete_msg = ("zeroed at natural resting position"
+                                + (" (left limp)" if is_limp_home else ""))
+            elif is_reverse_only:
+                complete_msg = ("rear-stop zero calibrated"
+                                + (" (left limp)" if is_limp_home else ""))
+            else:
+                complete_msg = "midpoint zero calibrated"
             self._set_calibration(
                 mh, active=False, phase="complete",
-                message=("rear-stop zero calibrated"
-                         + (" (left limp)" if is_limp_home else "")) if is_reverse_only
-                        else "midpoint zero calibrated", result=result,
+                message=complete_msg, result=result,
                 saved_at=self._calibration_store.get(self._cal_key(mh.channel, mh.motor_id), {}).get("saved_at"))
             return result
         except Exception as e:

@@ -14,7 +14,7 @@ the terminal, re-calibrating, recovering from faults, and so on).
   (clean machine)](#3-first-time-setup-clean-machine)**. You only do it once.
 - **Machine already set up?** Open a terminal in this folder and run `./run.sh`,
   then open <http://127.0.0.1:5000> and follow the on-screen wizard:
-  **Choose arm → Scan → Connect All → Set arm side → Calibrate → Controls**.
+  **Choose arm → Scan → Connect All → Calibrate → Controls**.
 
 ## Contents
 
@@ -220,9 +220,8 @@ To stop the dashboard, return to the terminal and press **Ctrl-C**.
 
 ## 6. Using the dashboard — step by step
 
-The dashboard guides you through a wizard: **Choose arm → Connect → Set arm side
-→ Calibrate → Controls**. There's also a built-in tutorial (look for
-**ⓘ Show tutorial**).
+The dashboard guides you through a wizard: **Choose arm → Connect → Calibrate →
+Controls**. There's also a built-in tutorial (look for **ⓘ Show tutorial**).
 
 ### Step 6.1 — Choose your arm
 
@@ -251,26 +250,18 @@ Calibration finds each joint's **range of motion** and sets its **zero point**.
 After calibration, the UI sliders and the backend both refuse to drive a joint
 past its real hardstops — this is an important safety feature.
 
-**First, set each arm's side (OpenArm only):** at the top of the Calibrate step
-you'll see an **Arm orientation** panel. Some joints (notably **J2**) can only
-auto-find one hardstop and must sweep *away from the body* — which way that is
-depends on whether the arm is the **left** or **right** one. For every connected
-arm:
-
-1. Not sure which physical arm a tab is? Click **Wiggle** — the arm that twitches
-   is the one you're setting.
-2. Pick **Left** or **Right**. The choice is saved (`arm_sides.json`) and reused
-   next time.
-
-The **Calibrate** buttons stay disabled until each arm that has a J2 has its side
-set, so you can't accidentally drive J2 into the body. (Aloha arms skip this —
-their joints are marked by hand.)
-
 **OpenArm (automatic):**
 
 - Click **Calibrate All Motors**. Each joint, one at a time, slowly creeps to
-  one hardstop, then the other, computes the midpoint, drives there, and stores
-  that midpoint as `0 rad`. The two stops become the joint's position min/max.
+  one hardstop, then the other. The two stops become the joint's position
+  min/max.
+- **Where zero ends up** depends on the joint:
+  - **Most joints** zero at the **midpoint** between the two stops (the joint
+    drives there and stores it as `0 rad`).
+  - **The base joints (J1 and J2)** instead zero at their **natural resting
+    (hanging) position**: after finding both stops the joint is released, allowed
+    to settle where gravity leaves it, and that spot becomes `0 rad`. These joints
+    are then left **limp** at home rather than being driven to a center.
 - Some joints (notably **J4**) need extra "breakaway" effort and are handled with
   a special profile automatically.
 - If a loaded joint can't be auto-calibrated, switch that joint to **Manual
@@ -295,16 +286,19 @@ every session unless something changes.
 
 ### Step 6.4 — Controls
 
-You get a card for **each joint** (J1…J8). Two view tabs at the top switch
-between:
+At the top of the Controls step is a **Controls** action bar with whole-arm
+buttons:
 
-- **All Motors** — bulk actions for the whole arm at once: **Enable All**,
-  **Disable All**, **Return Home**, and **Stop All**.
-- **Individual** — the per-joint cards, where you fine-tune one joint at a time.
+- **Enable All** — powers on every motor on the arm at once.
+- **Return Home** — drives calibrated joints back to their zero position.
+- **Disable All** — releases every motor on the arm (they go limp).
 
-By default each joint card shows just the move slider (and a *Currently at … rad*
-readout). Tick **Show live motor data** to also reveal the live position,
-velocity, torque, temperatures, and rolling plot for every motor.
+Next to those is a **Show live motor data** toggle. By default each joint card
+shows just the move slider (and a *Currently at … rad* readout); tick the toggle
+to also reveal each motor's live position, velocity, torque, temperatures, and
+rolling plot.
+
+Below the action bar you get a card for **each joint** (J1…J8).
 
 > **Two-arm setups:** if more than one arm is detected, a row of **arm tabs**
 > appears at the top of the controls so you can switch between them. An arm that
@@ -312,18 +306,18 @@ velocity, torque, temperatures, and rolling plot for every motor.
 > **greyed-out (disabled) tab** — that's normal. Connect its motors (back in the
 > Connect step) and the tab becomes selectable.
 
-For each joint:
+For each joint card:
 
 1. **Enable** — energizes the motor.
-2. Choose a **control mode**:
-   - **MIT** (impedance control): set **Kp** > 0, then drag **Target Position**
+2. Choose a **control mode** (under **Advanced**):
+   - **MIT** (impedance control): set **Kp** > 0, then drag **Move joint**
      to move. Add **Kd** for damping. Optional feed-forward velocity/torque.
      This is the most common mode.
    - **Position**: smooth move to a target position, capped by a velocity limit.
    - **Force-Pos**: position target with a velocity limit and a force ratio.
-3. Drag the sliders (or type exact numbers) to command the joint.
-4. **Return Home** drives calibrated joints back to their zero position.
-5. **Disable** cuts torque to that joint.
+3. Drag the slider (or type an exact number) to command the joint.
+4. **Disable** cuts torque to that joint (use **Return Home** in the action bar
+   above to send the whole arm back to zero first).
 
 Other handy controls:
 
