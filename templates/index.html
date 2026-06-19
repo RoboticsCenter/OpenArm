@@ -628,6 +628,8 @@ function goStep(step){
   STEPS.forEach(s=>document.getElementById("step-"+s).classList.toggle("hide", s!==step));
   updateStepper();
   if(step==="control"){
+    ensureActiveChannel();
+    if(activeChannel!=null) activateArm(activeChannel);
     applyView(); window.dispatchEvent(new Event("resize"));
     maybeAutoTutorial();
   }
@@ -1187,18 +1189,46 @@ G("grpHome").onclick=async()=>{
 };
 
 // ---- arm tabs (which arm's panel is shown) ----
+// renderArmTabs runs on every status frame, so only rebuild the buttons when
+// the set of arms actually changes. Rebuilding the DOM each frame would destroy
+// a button mid-click and swallow the click (why Arm 2 felt unclickable).
+let _armTabsSig=null;
+// One delegated listener on the container, attached once. This survives any
+// button rebuild, so the arm tabs are always clickable (per-button onclick
+// handlers were getting lost / out-paced by status-frame re-renders).
+G("armTabs").addEventListener("click", e=>{
+  const b=e.target.closest("button[data-channel]");
+  if(b) activateArm(b.dataset.channel);
+});
 function renderArmTabs(){
   const present=channelsPresent();
   const wrap=G("armTabs");
   G("armTabsCard").classList.toggle("hide", present.length<2);
-  wrap.innerHTML="";
-  present.forEach(ch=>{
-    const b=document.createElement("button");
-    b.dataset.channel=ch; b.textContent=armLabel(ch);
-    b.classList.toggle("active", String(ch)===String(activeChannel));
-    b.onclick=()=>{ activeChannel=String(ch); applyView(); };
-    wrap.appendChild(b);
+  const sig=present.join(",");
+  if(sig!==_armTabsSig){
+    wrap.innerHTML="";
+    present.forEach(ch=>{
+      const b=document.createElement("button");
+      b.dataset.channel=ch; b.textContent=armLabel(ch);
+      wrap.appendChild(b);
+    });
+    _armTabsSig=sig;
+  }
+  Array.from(wrap.children).forEach(b=>{
+    b.classList.toggle("active", String(b.dataset.channel)===String(activeChannel));
   });
+}
+// The dual adapter drives one bus at a time, so switching arms must tell the
+// backend to open that channel. Switching cuts torque on the arm you leave.
+let _activating=null;
+async function activateArm(ch){
+  ch=String(ch);
+  if(String(activeChannel)===ch && _activating==null){ applyView(); return; }
+  activeChannel=ch;
+  applyView();
+  _activating=ch;
+  try{ await post("/api/activate",{channel:ch}); }catch(e){}
+  _activating=null;
 }
 
 // ---- view tabs (group vs individual) ----
@@ -1235,6 +1265,7 @@ function applyView(){
   G("grpTitleArm").textContent= twoArms() ? (" — "+armLabel(activeChannel)) : "";
 }
 function updateGroupPanel(){
+  ensureActiveChannel();
   const motors=activeUids().map(u=>motorsByUid[u]).filter(Boolean);
   if(motors.length<1) return;
   G("grpCount").textContent=motors.length;
@@ -1311,7 +1342,7 @@ function sampleAgeSeconds(ts){ return ts ? +((Date.now()/1000)-ts).toFixed(3) : 
 function motorExportRecord(m){
   const state=m.state||{}, lim=m.limits||{};
   return {
-    motor_id:m.motor_id, feedback_id:m.feedback_id, model:m.model, name:motorName(m.motor_id),
+    motor_id:m.motor_id, feedback_id:m.feedback_id, channel:m.channel, arm:armLabel(m.channel), model:m.model, name:motorName(uidOf(m)),
     connection:{online:!!state.online, enabled:!!m.enabled, estopped:!!m.estopped, max_power:!!m.max_power,
       mode:m.mode, fault:m.fault||null, last_sample_at:unixToIso(state.ts), sample_age_seconds:sampleAgeSeconds(state.ts)},
     telemetry:{position_rad:state.pos, velocity_rad_s:state.vel, torque_nm:state.torq,
@@ -1426,7 +1457,7 @@ function tutPrev(){ if(tutIdx>0){ tutIdx--; showTutStep(); } }
 function maybeAutoTutorial(){
   let seen=false; try{ seen=localStorage.getItem(TUT_KEY)==="1"; }catch(_){}
   if(seen || tutActive) return;
-  if(connectedIds().length===0) return;
+  if(connectedUids().length===0) return;
   setTimeout(()=>{ if(currentStep==="control") startTutorial(); }, 450);
 }
 G("tutorial").addEventListener("click", e=>{
@@ -1461,7 +1492,7 @@ G("armPill").onclick=()=>{ closeManual(); showArmSelect(); };
 // ============================================================
 //  ALOHA MANUAL CALIBRATION PANEL
 // ============================================================
-let mc={id:null, rear:null, front:null, jogging:false, busy:false};
+let mc={uid:null, channel:null, motorId:null, rear:null, front:null, jogging:false, busy:false};
 function updateMcButtons(){
   const both=mc.rear!=null && mc.front!=null;
   const span=both?Math.abs(mc.front-mc.rear):0;
@@ -1469,12 +1500,13 @@ function updateMcButtons(){
   ["mcEnable","mcRelease","mcMarkRear","mcMarkFront","mcClose"].forEach(id=>G(id).disabled=mc.busy);
   G("mcJog").disabled=mc.busy;
 }
-async function openManual(id){
+async function openManual(u){
+  const {channel,motor_id}=splitUid(u);
   // clear any saved calibration so the joint can reach its true hardstops
-  await post("/api/clear_calibration",{motor_id:id});
-  mc={id, rear:null, front:null, jogging:false, busy:false};
-  const m=motorsById[id], pmax=(m&&m.limits&&m.limits.pmax)||12.5, p=m?m.state.pos:0;
-  G("mcName").textContent=motorName(id);
+  await post("/api/clear_calibration",{channel,motor_id});
+  mc={uid:u, channel, motorId:motor_id, rear:null, front:null, jogging:false, busy:false};
+  const m=motorsByUid[u], pmax=(m&&m.limits&&m.limits.pmax)||12.5, p=m?m.state.pos:0;
+  G("mcName").textContent=motorName(u);
   G("mcJog").min=-pmax; G("mcJog").max=pmax; G("mcJog").value=p;
   G("mcJogMin").textContent=(-pmax).toFixed(1); G("mcJogMax").textContent=pmax.toFixed(1);
   G("mcPos").textContent=(+p).toFixed(3);
@@ -1486,47 +1518,47 @@ async function openManual(id){
   G("manualPanel").scrollIntoView({block:"start", behavior:"smooth"});
 }
 function closeManual(){
-  if(mc.id!=null) post("/api/disable",{motor_id:mc.id});
+  if(mc.uid!=null) post("/api/disable",{channel:mc.channel, motor_id:mc.motorId});
   G("manualPanel").classList.add("hide");
-  mc={id:null, rear:null, front:null, jogging:false, busy:false};
+  mc={uid:null, channel:null, motorId:null, rear:null, front:null, jogging:false, busy:false};
 }
 G("mcClose").onclick=closeManual;
 G("mcEnable").onclick=async()=>{
-  if(mc.id==null) return;
-  const m=motorsById[mc.id], p=m?m.state.pos:0;
+  if(mc.uid==null) return;
+  const m=motorsByUid[mc.uid], p=m?m.state.pos:0;
   G("mcJog").value=p;
-  await post("/api/target",{motor_id:mc.id, pos:p, kp:defaultGains.kp, kd:defaultGains.kd});
-  const r=await post("/api/enable",{motor_id:mc.id});
+  await post("/api/target",{channel:mc.channel, motor_id:mc.motorId, pos:p, kp:defaultGains.kp, kd:defaultGains.kd});
+  const r=await post("/api/enable",{channel:mc.channel, motor_id:mc.motorId});
   flash(G("mcCmd"), r.ok?"enabled — use the slider to move the joint":"enable failed: "+r.error, !r.ok);
 };
-G("mcRelease").onclick=async()=>{ if(mc.id==null) return; await post("/api/disable",{motor_id:mc.id}); flash(G("mcCmd"),"released (joint is limp)"); };
+G("mcRelease").onclick=async()=>{ if(mc.uid==null) return; await post("/api/disable",{channel:mc.channel, motor_id:mc.motorId}); flash(G("mcCmd"),"released (joint is limp)"); };
 G("mcJog").addEventListener("input",()=>{
-  if(mc.id==null) return;
+  if(mc.uid==null) return;
   mc.jogging=true; clearTimeout(mc._jt); mc._jt=setTimeout(()=>mc.jogging=false,1200);
-  post("/api/target",{motor_id:mc.id, pos:parseFloat(G("mcJog").value)});
+  post("/api/target",{channel:mc.channel, motor_id:mc.motorId, pos:parseFloat(G("mcJog").value)});
 });
 G("mcMarkRear").onclick=()=>{
-  const m=motorsById[mc.id]; if(!m) return;
+  const m=motorsByUid[mc.uid]; if(!m) return;
   mc.rear=m.state.pos; G("mcRearVal").textContent=mc.rear.toFixed(3)+" rad"; G("mcRearBox").classList.add("marked");
   flash(G("mcCmd"),`rear stop marked at ${mc.rear.toFixed(3)} rad`); updateMcButtons();
 };
 G("mcMarkFront").onclick=()=>{
-  const m=motorsById[mc.id]; if(!m) return;
+  const m=motorsByUid[mc.uid]; if(!m) return;
   mc.front=m.state.pos; G("mcFrontVal").textContent=mc.front.toFixed(3)+" rad"; G("mcFrontBox").classList.add("marked");
   flash(G("mcCmd"),`front stop marked at ${mc.front.toFixed(3)} rad`); updateMcButtons();
 };
 G("mcConfirm").onclick=async()=>{
-  if(mc.rear==null||mc.front==null||mc.id==null) return;
-  if(!confirm(`Confirm calibration for ${motorName(mc.id)}?\n\nThe joint will move to the midpoint between your two marks and set zero there. Keep clear and be ready to E-STOP.`)) return;
+  if(mc.rear==null||mc.front==null||mc.uid==null) return;
+  if(!confirm(`Confirm calibration for ${motorName(mc.uid)}?\n\nThe joint will move to the midpoint between your two marks and set zero there. Keep clear and be ready to E-STOP.`)) return;
   mc.busy=true; updateMcButtons(); flash(G("mcCmd"),"centering and zeroing…");
-  const r=await post("/api/manual_calibrate_center",{motor_id:mc.id, low_stop:mc.rear, high_stop:mc.front});
+  const r=await post("/api/manual_calibrate_center",{channel:mc.channel, motor_id:mc.motorId, low_stop:mc.rear, high_stop:mc.front});
   if(!r.ok){ mc.busy=false; updateMcButtons(); flash(G("mcCmd"),"calibration failed: "+r.error,true); return; }
   flash(G("mcCmd"),"calibrated ✓");
   setTimeout(closeManual, 600);
 };
 function updateMcLive(){
-  if(mc.id==null || G("manualPanel").classList.contains("hide")) return;
-  const m=motorsById[mc.id];
+  if(mc.uid==null || G("manualPanel").classList.contains("hide")) return;
+  const m=motorsByUid[mc.uid];
   if(!m){ closeManual(); return; }
   G("mcPos").textContent=m.state.pos.toFixed(3);
   if(!mc.jogging && document.activeElement!==G("mcJog")) G("mcJog").value=m.state.pos;
@@ -1540,25 +1572,25 @@ function updateMcLive(){
 // ============================================================
 function render(status){
   latest=status; const motors=status.motors||[];
-  motorsById={}; motors.forEach(m=>motorsById[m.motor_id]=m);
+  motorsByUid={}; motors.forEach(m=>motorsByUid[uidOf(m)]=m);
 
-  // control cards
-  const ids=new Set(motors.map(m=>m.motor_id));
-  Object.keys(cards).forEach(k=>{if(!ids.has(parseInt(k))) removeCard(parseInt(k));});
+  // control cards (keyed by uid so both arms coexist)
+  const uids=new Set(motors.map(m=>uidOf(m)));
+  Object.keys(cards).forEach(k=>{if(!uids.has(k)) removeCard(k);});
   let anyOnline=false;
-  motors.forEach(m=>{ const ctx=cards[m.motor_id]||makeCard(m.motor_id); ctx.update(m); if(m.state.online) anyOnline=true; });
+  motors.forEach(m=>{ const u=uidOf(m); const ctx=cards[u]||makeCard(u); ctx.update(m); if(m.state.online) anyOnline=true; });
 
   // step surfaces
   updateScanRowStates();
-  renderCalList(motors);
+  renderCalList();
   updateCalStep();
   updateMcLive();
-  updateGroupPanel(motors);
+  updateGroupPanel();
   if(currentStep==="control") applyView();
   updateStepper();
 
   // continue buttons availability
-  document.getElementById("toCalibrate").disabled=connectedIds().length===0;
+  document.getElementById("toCalibrate").disabled=connectedUids().length===0;
 
   // header bus status
   const anyConn=motors.length>0;

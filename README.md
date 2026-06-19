@@ -17,11 +17,15 @@ the terminal, re-calibrating, recovering from faults, and so on).
 ## 1. What this is and how it's wired
 
 The motors talk the DaMiao **MIT CAN protocol**. Your computer talks to them
-through a **DM-USB2FDCAN** USB-to-CAN adapter:
+through a **DM-USB2FDCAN** USB-to-CAN adapter. When plugged in, it shows up in
+`lsusb` looking like this:
 
 ```
 Bus 003 Device 005: ID 34b7:6632 DaMiao-Tech DM-USB2FDCAN
 ```
+
+The `Bus`/`Device` numbers will be different on your machine — that's fine. The
+part that matters is the USB ID **`34b7:6632`** and the `DM-USB2FDCAN` name.
 
 - The adapter runs in **USB mode**: the real control data flows over a
   vendor-specific bulk USB interface. (There is also a `/dev/ttyACM0` debug
@@ -71,11 +75,14 @@ up, skip to [Section 5: Running the dashboard](#5-running-the-dashboard-every-da
 
 ### Step 3.1 — Open a terminal in this folder
 
+Clone the repository (or copy this folder onto the machine), then `cd` into it:
+
 ```bash
-cd /home/jerry-ubuntu/motor-test
+git clone https://github.com/RoboticsCenter/aloha-openarm.git
+cd aloha-openarm
 ```
 
-(Adjust the path to wherever this folder lives on your machine.)
+If you already have the folder, just `cd` into wherever it lives on your machine.
 
 ### Step 3.2 — Create the Python environment and install dependencies
 
