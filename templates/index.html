@@ -1189,17 +1189,33 @@ G("grpHome").onclick=async()=>{
 };
 
 // ---- arm tabs (which arm's panel is shown) ----
+// renderArmTabs runs on every status frame, so only rebuild the buttons when
+// the set of arms actually changes. Rebuilding the DOM each frame would destroy
+// a button mid-click and swallow the click (why Arm 2 felt unclickable).
+let _armTabsSig=null;
+// One delegated listener on the container, attached once. This survives any
+// button rebuild, so the arm tabs are always clickable (per-button onclick
+// handlers were getting lost / out-paced by status-frame re-renders).
+G("armTabs").addEventListener("click", e=>{
+  const b=e.target.closest("button[data-channel]");
+  if(b) activateArm(b.dataset.channel);
+});
 function renderArmTabs(){
   const present=channelsPresent();
   const wrap=G("armTabs");
   G("armTabsCard").classList.toggle("hide", present.length<2);
-  wrap.innerHTML="";
-  present.forEach(ch=>{
-    const b=document.createElement("button");
-    b.dataset.channel=ch; b.textContent=armLabel(ch);
-    b.classList.toggle("active", String(ch)===String(activeChannel));
-    b.onclick=()=>{ activateArm(ch); };
-    wrap.appendChild(b);
+  const sig=present.join(",");
+  if(sig!==_armTabsSig){
+    wrap.innerHTML="";
+    present.forEach(ch=>{
+      const b=document.createElement("button");
+      b.dataset.channel=ch; b.textContent=armLabel(ch);
+      wrap.appendChild(b);
+    });
+    _armTabsSig=sig;
+  }
+  Array.from(wrap.children).forEach(b=>{
+    b.classList.toggle("active", String(b.dataset.channel)===String(activeChannel));
   });
 }
 // The dual adapter drives one bus at a time, so switching arms must tell the

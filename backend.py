@@ -115,6 +115,10 @@ CAL_J4_CENTER_KP = _env_float("CAL_J4_CENTER_KP", CAL_MIT_MAX_KP)
 # saved calibration span (or this default if nothing has been saved yet), so we
 # never drive J4 into the front stop or require a manual mark.
 CAL_J4_DEFAULT_SPAN_RAD = _env_float("CAL_J4_DEFAULT_SPAN_RAD", 1.93904)
+# J1 only auto-finds its REVERSE (rear) hardstop -- it must never sweep forward.
+# Zero is set at that rear stop and the forward extent uses the saved span (or
+# this default). J1's "home" is no power (limp), so it is never driven/centered.
+CAL_J1_DEFAULT_SPAN_RAD = _env_float("CAL_J1_DEFAULT_SPAN_RAD", 3.14159)
 CAL_PROGRESS_EPS_RAD = 0.01
 CAL_EFFORT_STAGE_SCALES = (1.0, 1.35, 1.75, 2.20)
 CAL_JOINT_PROFILES = {
@@ -1345,6 +1349,7 @@ class MotorService:
             message=f"auto calibration at {speed:.2f} rad/s "
                     f"(Kp {kp:.1f}, lead {lead:.2f})", error=None,
             result=None)
+        is_j1 = int(motor_id) == 1
         is_j4 = int(motor_id) == 4
         method = "auto"
         try:
@@ -1356,7 +1361,17 @@ class MotorService:
                 message=f"low hardstop at {low:.3f} rad")
             time.sleep(0.25)
             self._raise_if_calibration_stopped(mh)
-            if is_j4:
+            if is_j1:
+                # J1 only sweeps reverse to its rear stop -- never forward. The
+                # forward extent comes from the saved span (or the default).
+                method = "j1_reverse_only_limp"
+                span = self._saved_span(mh) or CAL_J1_DEFAULT_SPAN_RAD
+                high = low + span
+                self._set_calibration(
+                    mh, active=True, phase="using saved front",
+                    message=f"J1 rear stop at {low:.3f} rad; using span "
+                            f"{span:.3f} rad for the forward extent (left limp)")
+            elif is_j4:
                 # J4 must not drive into its front stop, so reuse the saved span
                 # (or the configured default) to place the forward extent.
                 method = "j4_back_saved_front"
@@ -1373,12 +1388,22 @@ class MotorService:
             if span < CAL_MIN_SPAN_RAD:
                 raise RuntimeError(
                     f"hardstop span too small ({span:.3f} rad); check motion path")
-            center = (low + high) / 2.0
-            pos_min = min(low, high) - center
-            pos_max = max(low, high) - center
+            if is_j1:
+                # Zero sits at the rear hardstop; the usable range runs forward
+                # from there. J1 is never centered -- it is left limp at the stop.
+                center = low
+                pos_min = 0.0
+                pos_max = span
+            else:
+                center = (low + high) / 2.0
+                pos_min = min(low, high) - center
+                pos_max = max(low, high) - center
             move_timeout = max(30.0, span / speed + 15.0)
             self._raise_if_calibration_stopped(mh)
-            if is_j4:
+            if is_j1:
+                # No centering move: leave it sitting at the rear stop, no power.
+                pass
+            elif is_j4:
                 # Position mode reaches the midpoint reliably from the back stop;
                 # fall back to stronger MIT centering only if pos_vel setup fails.
                 try:
@@ -1431,7 +1456,8 @@ class MotorService:
             self._save_calibration(mh, result, method)
             self._set_calibration(
                 mh, active=False, phase="complete",
-                message="midpoint zero calibrated", result=result,
+                message="rear-stop zero calibrated (left limp)" if is_j1
+                        else "midpoint zero calibrated", result=result,
                 saved_at=self._calibration_store.get(self._cal_key(mh.channel, mh.motor_id), {}).get("saved_at"))
             return result
         except Exception as e:
@@ -1461,6 +1487,12 @@ class MotorService:
                 if single and mh.motor_id != int(motor_id):
                     continue
                 if mh._motor is None:
+                    continue
+                if mh.motor_id == 1:
+                    # J1's home is no power: cut torque and leave it limp.
+                    self._do_disable(mh.channel, mh.motor_id)
+                    homed.append({"channel": mh.channel,
+                                  "motor_id": mh.motor_id, "limp": True})
                     continue
                 pmax, _, _ = mh.limits
                 calibrated = mh.pos_min is not None and mh.pos_max is not None
