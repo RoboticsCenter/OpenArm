@@ -1056,14 +1056,27 @@ async function calibrateJoints(joints, returnHome){
   calibrating=false; updateCalStep();
   flash(cmd,`Calibrated ${joints.length} joint${joints.length>1?'s':''} ✓`);
 }
+// Safety gate for the bulk "all motors" calibration sweeps: every joint moves
+// on its own, so make the user confirm the robot is clamped down and everyone
+// is clear before any motion starts. (Per-joint buttons keep their own prompt.)
+function confirmCalibrateAllSafety(intro){
+  return confirm(
+    intro+"\n\n"+
+    "SAFETY CHECK — every joint will move on its own:\n"+
+    "  • Are you and everyone else standing clear of the robot?\n"+
+    "  • Is the robot securely clamped down / bolted to the surface?\n\n"+
+    "Each joint drives to its hardstops one at a time (on every arm), then sets "+
+    "its zero. Be ready to E-STOP.\n\n"+
+    "Click OK only if you are at a safe distance and the robot is clamped down.");
+}
 document.getElementById("btnCalAll").onclick=async()=>{
   const uncal=connectedJoints().filter(j=>!jointCalibrated(j));
   if(!uncal.length) return;
-  if(!confirm("Calibrate every joint that still needs it?\n\nEach joint moves to its hardstops one at a time (on every arm), then sets its zero. Keep clear and be ready to E-STOP.")) return;
+  if(!confirmCalibrateAllSafety("Calibrate every joint that still needs it?")) return;
   await calibrateJoints(uncal, true);
 };
 document.getElementById("btnRecalAll").onclick=async()=>{
-  if(!confirm("Re-calibrate ALL connected joints?\n\nThis overwrites the saved calibration for every motor on every arm. Keep clear and be ready to E-STOP.")) return;
+  if(!confirmCalibrateAllSafety("Re-calibrate ALL connected joints? This overwrites the saved calibration for every motor on every arm.")) return;
   await calibrateJoints(connectedJoints(), true);
 };
 
