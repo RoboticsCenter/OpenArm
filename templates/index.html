@@ -70,6 +70,16 @@
   .switch{position:relative;width:54px;height:28px;flex:0 0 auto}
   .empty{text-align:center;color:var(--muted);padding:50px 20px}
   .num-inline{width:84px;text-align:center;padding:6px 8px}
+  /* live-data toggle (control step) */
+  .datatoggle{display:inline-flex;align-items:center;gap:9px;font-size:13px;color:var(--muted);
+        background:var(--panel2);border:1px solid var(--line);padding:9px 14px;border-radius:999px;cursor:pointer;
+        white-space:nowrap;user-select:none;font-weight:600;flex:0 0 auto}
+  .datatoggle input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0}
+  .datatoggle:hover{border-color:var(--accent);color:var(--txt)}
+  /* when "lite", per-motor cards hide their telemetry/plot and show only controls */
+  #motors.lite .m-livedata{display:none}
+  .m-nowline{font-variant-numeric:tabular-nums}
+  .m-now{color:var(--txt);font-weight:600}
   .advanced-settings{margin-top:14px;border:1px solid var(--line);border-radius:12px;background:rgba(28,35,51,.55);overflow:hidden}
   .advanced-settings>summary{cursor:pointer;list-style:none;padding:11px 13px;font-size:13px;font-weight:700;color:var(--txt);
         display:flex;align-items:center;justify-content:space-between;gap:10px}
@@ -166,6 +176,7 @@
     <button id="armPill" class="pill" style="cursor:pointer" title="Change arm type"><span id="armIcon">&#129482;</span><span id="armName">choose arm</span></button>
     <span class="pill"><span id="busDot" class="dot"></span><span id="busTxt">no motors</span></span>
     <button id="btnEstopAll" class="btn-estop">&#9632; E-STOP ALL</button>
+    <button id="estopHotkeyBtn" class="pill" style="cursor:pointer" title="Click, then press a key to rebind the E-stop hotkey">E-stop key: <b id="estopHotkeyLabel">Space</b></button>
   </div>
 </header>
 
@@ -219,17 +230,21 @@
       <p class="step-sub">Scan the bus to find every motor that's powered on and wired up.
         Give each one a friendly name, then connect them all with one click.</p>
 
+      <div class="nav-footer step-top-actions" style="margin:0 0 18px">
+        <span class="spacer"></span>
+        <div id="connectAllWrap" class="hide" style="display:flex;gap:12px">
+          <button id="btnRescan" class="btn-ghost" style="width:auto">Re-scan</button>
+          <button id="btnConnectAll" class="btn-good" style="width:auto">Connect All Motors</button>
+        </div>
+        <button id="toCalibrate" class="btn-accent" style="width:auto" disabled>Continue to Calibration &rarr;</button>
+      </div>
+
       <div class="center-cta" id="scanCta">
         <button id="btnScan" class="btn-accent btn-lg">Scan for Motors</button>
         <div id="scanOut" class="statusline" style="text-align:center"></div>
       </div>
 
       <div id="scanResult" class="mlist"></div>
-
-      <div id="connectAllWrap" class="hide" style="margin-top:18px;display:flex;gap:12px;justify-content:flex-end">
-        <button id="btnRescan" class="btn-ghost" style="width:auto">Re-scan</button>
-        <button id="btnConnectAll" class="btn-good" style="width:auto">Connect All Motors</button>
-      </div>
 
       <details class="advanced-settings">
         <summary>Advanced <span class="muted">add a motor manually by CAN id</span></summary>
@@ -248,17 +263,25 @@
         </div>
       </details>
     </div>
-
-    <div class="nav-footer">
-      <span class="spacer"></span>
-      <button id="toCalibrate" class="btn-accent" style="width:auto" disabled>Continue to Calibration &rarr;</button>
-    </div>
   </section>
 
   <!-- ============ STEP 2: CALIBRATE ============ -->
   <section id="step-calibrate" class="step hide">
+    <!-- Arm orientation: REQUIRED before calibration so the side-dependent
+         joint (2) sweeps away from the body, not into it. Shown up top. -->
+    <div id="armSidePanel" class="card hide" style="border-color:var(--accent)">
+      <div class="mhead">
+        <div class="title">1. Arm orientation
+          <small>required &mdash; set each arm's side so joint 2 calibrates away from the body</small></div>
+      </div>
+      <p class="step-sub" style="margin:0 0 12px">Not sure which arm is which? Hit <b>Wiggle</b> &mdash; the
+        arm that moves is the one you're setting. Then pick <b>Left</b> or <b>Right</b>.</p>
+      <div id="armSideList" class="mlist"></div>
+      <div id="armSideCmd" class="statusline"></div>
+    </div>
+
     <div class="card">
-      <h3 class="step-head">Calibrate motors</h3>
+      <h3 class="step-head">2. Calibrate motors</h3>
       <p class="step-sub" id="calSub">Calibration finds each joint's range of motion and sets its zero point.
         It's required once before you can control the motors. Keep the area clear &mdash; the joints will
         move on their own. You can hit <b>E-STOP</b> at any time.</p>
@@ -324,85 +347,20 @@
       <p class="muted" style="text-align:center;margin:8px 0 0">Each arm has its own control panel below.</p>
     </div>
 
-    <!-- View tabs: control both together or each individually -->
-    <div class="card" id="viewTabsCard" style="padding:12px 18px">
-      <div class="seg" id="viewTabs" style="max-width:420px;margin:0 auto">
-        <button data-view="group" class="active">&#9036; All Motors (Group)</button>
-        <button data-view="individual">&#9034; Individual</button>
-      </div>
-    </div>
-
-    <!-- Group / sync control -->
-    <div id="groupCard" class="card hide" style="border-color:var(--accent)">
+    <!-- Top actions for the active arm -->
+    <div id="indivActions" class="card hide" style="border-color:var(--accent)">
       <div class="mhead">
-        <div class="title">&#9036; Group Control<span id="grpTitleArm"></span> <small>one set of commands drives this arm's motors together</small></div>
-        <span class="pill"><span id="grpDot" class="dot"></span><span id="grpCount">0</span> motors</span>
+        <div class="title">Controls<span id="indivTitleArm"></span> <small>enable or home this arm's motors</small></div>
+        <span class="pill"><span id="indivDot" class="dot"></span><span id="indivCount">0</span> motors</span>
       </div>
       <div class="powerbar">
-        <button id="grpEnable" class="btn-good">Enable All</button>
-        <button id="grpDisable">Disable All</button>
+        <button id="indivEnable" class="btn-good">Enable All</button>
+        <button id="indivHome" class="btn-accent">Return Home</button>
       </div>
-      <div class="powerbar">
-        <button id="grpHome" class="btn-good">Return Home</button>
-        <button id="grpStop" class="btn-estop">&#9632; Stop All</button>
-      </div>
-
-      <div class="grpctl" data-for="pos">
-        <label>Target Position <span class="muted">(rad) &mdash; sent to all</span></label>
-        <input type="range" id="gPos" min="-12.5" max="12.5" step="0.01" value="0">
-        <div class="sliderval"><span class="gpos-min">-12.5</span>
-          <input type="number" id="gnPos" class="num-inline" value="0" step="0.05">
-          <span class="gpos-max">12.5</span></div>
-      </div>
-      <details class="advanced-settings">
-        <summary>Advanced <span class="muted">mode, velocity, gains, torque</span></summary>
-        <div class="advanced-body">
-          <label>Control Mode (all motors)</label>
-          <div class="seg" id="grpMode">
-            <button data-mode="mit" class="active">MIT</button>
-            <button data-mode="pos_vel">Position</button>
-            <button data-mode="force_pos">Force-Pos</button>
-          </div>
-          <div class="grpctl" data-for="vel">
-            <label>Velocity <span class="muted">(rad/s) &mdash; sent to all</span></label>
-            <input type="range" id="gVel" min="-20" max="20" step="0.05" value="0">
-            <div class="sliderval"><span>&minus;<span class="gvel-lim">20</span></span>
-              <input type="number" id="gnVel" class="num-inline" value="0" step="0.1">
-              <span><span class="gvel-lim">20</span></span></div>
-          </div>
-          <div class="grpctl" data-for="vlim">
-            <label>Velocity Limit <span class="muted">(rad/s)</span></label>
-            <input type="range" id="gVlim" min="0" max="20" step="0.05" value="2">
-            <div class="sliderval"><span>0</span>
-              <input type="number" id="gnVlim" class="num-inline" value="2" step="0.1">
-              <span><span class="gvel-lim">20</span></span></div>
-          </div>
-          <div class="grid2 grpctl" data-for="gains">
-            <div>
-              <label>Kp <span class="muted">(stiffness)</span></label>
-              <input type="range" id="gKp" min="0" max="200" step="0.5" value="20">
-              <div class="sliderval"><span>0</span><span id="gKpVal">20</span><span>200</span></div>
-            </div>
-            <div>
-              <label>Kd <span class="muted">(damping)</span></label>
-              <input type="range" id="gKd" min="0" max="5" step="0.05" value="4">
-              <div class="sliderval"><span>0</span><span id="gKdVal">4</span><span>5</span></div>
-            </div>
-          </div>
-          <div class="grpctl" data-for="tau">
-            <label>Feed-forward Torque <span class="muted">(Nm)</span></label>
-            <input type="range" id="gTau" min="-10" max="10" step="0.02" value="0">
-            <div class="sliderval"><span>&minus;<span class="gtau-lim">10</span></span><span id="gTauVal">0</span><span><span class="gtau-lim">10</span></span></div>
-          </div>
-          <div class="grpctl" data-for="ratio">
-            <label>Force Ratio <span class="muted">(0&ndash;1)</span></label>
-            <input type="range" id="gRatio" min="0" max="1" step="0.01" value="1">
-            <div class="sliderval"><span>0</span><span id="gRatioVal">1</span><span>1</span></div>
-          </div>
-        </div>
-      </details>
-      <p class="muted" id="grpHint" style="margin-top:12px"></p>
-      <div id="grpCmd" class="statusline"></div>
+      <label class="datatoggle" style="margin-top:10px" title="Show each motor's live position, velocity, torque, temperatures and graph">
+        <input type="checkbox" id="showLiveData"> Show live motor data
+      </label>
+      <div id="indivCmd" class="statusline"></div>
     </div>
 
     <!-- Per-motor cards -->
@@ -464,16 +422,18 @@
     <span class="pill"><span class="m-dot dot"></span><span class="m-online">offline</span></span>
   </div>
 
-  <div class="telem">
-    <div class="metric"><div class="k">Position</div><div class="v"><span class="m-pos">0.00</span><span class="u">rad</span></div></div>
-    <div class="metric"><div class="k">Velocity</div><div class="v"><span class="m-vel">0.00</span><span class="u">rad/s</span></div></div>
-    <div class="metric"><div class="k">Torque</div><div class="v"><span class="m-torq">0.00</span><span class="u">Nm</span></div></div>
-    <div class="metric"><div class="k">MOSFET T</div><div class="v"><span class="m-tmos">0</span><span class="u">&deg;C</span></div></div>
-    <div class="metric"><div class="k">Rotor T</div><div class="v"><span class="m-trot">0</span><span class="u">&deg;C</span></div></div>
-    <div class="metric"><div class="k">Status</div><div class="v"><span class="m-stat">&mdash;</span></div></div>
+  <div class="m-livedata">
+    <div class="telem">
+      <div class="metric"><div class="k">Position</div><div class="v"><span class="m-pos">0.00</span><span class="u">rad</span></div></div>
+      <div class="metric"><div class="k">Velocity</div><div class="v"><span class="m-vel">0.00</span><span class="u">rad/s</span></div></div>
+      <div class="metric"><div class="k">Torque</div><div class="v"><span class="m-torq">0.00</span><span class="u">Nm</span></div></div>
+      <div class="metric"><div class="k">MOSFET T</div><div class="v"><span class="m-tmos">0</span><span class="u">&deg;C</span></div></div>
+      <div class="metric"><div class="k">Rotor T</div><div class="v"><span class="m-trot">0</span><span class="u">&deg;C</span></div></div>
+      <div class="metric"><div class="k">Status</div><div class="v"><span class="m-stat">&mdash;</span></div></div>
+    </div>
+    <canvas class="m-plot" width="800" height="130"></canvas>
+    <div class="sliderval" style="margin-top:8px"><span class="badge m-lim">limits &mdash;</span></div>
   </div>
-  <canvas class="m-plot" width="800" height="130"></canvas>
-  <div class="sliderval" style="margin-top:8px"><span class="badge m-lim">limits &mdash;</span></div>
 
   <div class="powerbar">
     <button class="m-enable btn-good">Enable</button>
@@ -481,11 +441,12 @@
   </div>
 
   <div class="ctl" data-for="pos">
-    <label>Target Position <span class="muted">(rad)</span></label>
+    <label>Move joint <span class="muted">&mdash; drag to set the target angle (rad)</span></label>
     <input type="range" class="r-pos" min="-12.5" max="12.5" step="0.01" value="0">
     <div class="sliderval"><span class="pos-min">-12.5</span>
       <input type="number" class="n-pos num-inline" value="0" step="0.05">
       <span class="pos-max">12.5</span></div>
+    <div class="muted m-nowline" style="margin-top:5px">Currently at <span class="m-now">0.00</span> rad</div>
   </div>
   <details class="advanced-settings">
     <summary>Advanced <span class="muted">mode, velocity, gains, torque</span></summary>
@@ -788,9 +749,76 @@ function jointActive(motorId){
 }
 
 function renderCalList(){
+  renderArmSides();
   if(currentArm()==="aloha"){ renderCalListAloha(); return; }
   renderCalListJoints();
 }
+
+// ---- arm orientation (left/right) for reverse-only joint calibration ----
+let armSides={};
+let _armSideSig=null;
+function renderArmSides(){
+  const panel=G("armSidePanel"), list=G("armSideList");
+  const present=channelsPresent();
+  // Side only affects the OpenArm auto-sweep; not relevant for Aloha.
+  const show = currentArm()!=="aloha" && present.length>=1;
+  panel.classList.toggle("hide", !show);
+  if(!show) return;
+  const sig=present.join(",");
+  if(sig!==_armSideSig){
+    list.innerHTML="";
+    present.forEach(ch=>{
+      const row=document.createElement("div");
+      row.className="mrow"; row.dataset.channel=ch;
+      row.innerHTML=`
+        <div class="body"><div class="mname">${armLabel(ch)}</div>
+          <div class="muted side-status" style="font-size:12px"></div></div>
+        <button class="btn-ghost" data-act="wiggle" style="width:auto">Wiggle</button>
+        <div class="seg" data-act="side" style="max-width:170px;margin:0">
+          <button data-side="left">Left</button><button data-side="right">Right</button>
+        </div>`;
+      list.appendChild(row);
+    });
+    _armSideSig=sig;
+  }
+  const needSide=new Set(armsNeedingSide());
+  Array.from(list.children).forEach(row=>{
+    const ch=row.dataset.channel, set=sideSet(ch);
+    row.querySelectorAll('[data-act="side"] button').forEach(b=>
+      b.classList.toggle("active", set && b.dataset.side===armSides[ch]));
+    const st=row.querySelector(".side-status");
+    if(set) st.textContent="set to "+armSides[ch];
+    else if(needSide.has(ch)) st.innerHTML='<span style="color:var(--warn,#e6a23c)">required for joint 2 — not set</span>';
+    else st.textContent="optional (no joint 2 on this arm)";
+  });
+}
+// Arms that include the side-dependent joint (joint 2) MUST have their side set
+// before calibration, otherwise joint 2 would sweep into the body on a right arm.
+function armsNeedingSide(){
+  if(currentArm()==="aloha") return [];
+  return channelsPresent().filter(ch=>
+    connectedUids().some(u=>{const s=splitUid(u);
+      return String(s.channel)===String(ch) && s.motor_id===2;}));
+}
+function sideSet(ch){ return armSides[ch]==="left"||armSides[ch]==="right"; }
+function sidesReady(){ return armsNeedingSide().every(sideSet); }
+document.getElementById("armSideList").addEventListener("click", async e=>{
+  const row=e.target.closest(".mrow[data-channel]"); if(!row) return;
+  const ch=row.dataset.channel;
+  const wig=e.target.closest('[data-act="wiggle"]');
+  const sideBtn=e.target.closest('[data-act="side"] button[data-side]');
+  if(wig){
+    wig.disabled=true; flash(G("armSideCmd"),`wiggling ${armLabel(ch)}… watch which arm moves`);
+    const r=await post("/api/identify_arm",{channel:ch}); wig.disabled=false;
+    flash(G("armSideCmd"), r.ok?`Did ${armLabel(ch)} just move? Now set its side below.`
+                               :("wiggle failed: "+(r.error||"")), !r.ok);
+  } else if(sideBtn){
+    const side=sideBtn.dataset.side;
+    const r=await post("/api/arm_side",{channel:ch,side});
+    if(r.ok){ armSides[ch]=side; renderArmSides(); flash(G("armSideCmd"),`${armLabel(ch)} set to ${side}`); }
+    else flash(G("armSideCmd"),"failed: "+(r.error||""),true);
+  }
+});
 
 function renderCalListJoints(){
   const joints=connectedJoints();
@@ -854,13 +882,13 @@ function renderCalListJoints(){
     } else if(jointCalibrated(j)){
       tag.className="statetag ok cal-tag";
       tag.textContent= multi ? `calibrated · ${uids.length} arm${uids.length>1?'s':''}` : "calibrated";
-      recal.disabled=calibrating; recal.textContent="Re-calibrate";
+      recal.disabled=calibrating || !sidesReady(); recal.textContent="Re-calibrate";
       remove.classList.remove("hide"); remove.disabled=calibrating;
     } else {
       const done=uids.filter(u=>isCalibrated(motorsByUid[u])).length;
       tag.className="statetag todo cal-tag";
       tag.textContent= (multi&&done>0) ? `${done}/${uids.length} arms calibrated` : "needs calibration";
-      recal.disabled=calibrating; recal.textContent="Calibrate";
+      recal.disabled=calibrating || !sidesReady(); recal.textContent="Calibrate";
       remove.classList.add("hide");
     }
   });
@@ -941,8 +969,12 @@ function updateCalStep(){
   const multi=twoArms();
   const unit=multi?"motor":"motor";
 
+  const sidesOk=sidesReady();
+  const missing=armsNeedingSide().filter(ch=>!sideSet(ch));
   if(uids.length===0){
     banner.innerHTML=`<div class="banner banner-warn">No motors connected yet. Go back and connect first.</div>`;
+  } else if(!sidesOk){
+    banner.innerHTML=`<div class="banner banner-warn">Set the side (Left / Right) for ${missing.map(armLabel).join(" and ")} in <b>Arm orientation</b> below before calibrating &mdash; joint 2 needs it to sweep away from the body.</div>`;
   } else if(allCal){
     banner.innerHTML=`<div class="banner banner-good">&#10003; All motors are calibrated${uids.some(u=>(motorsByUid[u].calibration||{}).saved_at)?' (loaded from a saved calibration)':''}. You're ready to control them &mdash; or re-calibrate if anything changed.</div>`;
   } else if(multi){
@@ -954,8 +986,8 @@ function updateCalStep(){
   const aloha = currentArm()==="aloha";
   calAll.classList.toggle("hide", allCal || aloha);
   recalAll.classList.toggle("hide", !allCal || aloha);
-  calAll.disabled=calibrating || uncal.length===0;
-  recalAll.disabled=calibrating;
+  calAll.disabled=calibrating || uncal.length===0 || !sidesOk;
+  recalAll.disabled=calibrating || !sidesOk;
   const skip=document.getElementById("skipCalibration");
   skip.classList.toggle("hide", allCal || uids.length===0);
   skip.disabled=calibrating;
@@ -970,6 +1002,11 @@ async function runAutoCalibrate(channel, motorId){
 // Calibrate each joint across every arm that has it (one joint at a time).
 async function calibrateJoints(joints, returnHome){
   if(!joints.length || calibrating) return;
+  if(!sidesReady()){
+    flash(document.getElementById("calCmd"),
+      "Set each arm's side (Left / Right) in Arm orientation first.",true);
+    return;
+  }
   calibrating=true; updateCalStep();
   const cmd=document.getElementById("calCmd");
   for(const j of joints){
@@ -1088,6 +1125,7 @@ function makeCard(u){
       q(".m-online").textContent=on?"online":(s.enabled?"enabled":"connected"); }
     setLimits(s.limits);
     q(".m-pos").textContent=s.state.pos.toFixed(3);
+    q(".m-now").textContent=s.state.pos.toFixed(2);
     q(".m-vel").textContent=s.state.vel.toFixed(3);
     q(".m-torq").textContent=s.state.torq.toFixed(3);
     q(".m-tmos").textContent=s.state.t_mos;
@@ -1109,7 +1147,8 @@ function makeCard(u){
       applyMode();
     }
     if(on){ctx.plot.pos.push(s.state.pos);ctx.plot.vel.push(s.state.vel);
-      if(ctx.plot.pos.length>ctx.plot.max){ctx.plot.pos.shift();ctx.plot.vel.shift();}draw();}
+      if(ctx.plot.pos.length>ctx.plot.max){ctx.plot.pos.shift();ctx.plot.vel.shift();}
+      if(showLiveData) draw();}
   };
   applyMode();
   document.getElementById("motors").appendChild(node);
@@ -1125,12 +1164,12 @@ function refreshNames(){
 }
 
 // ============================================================
-//  GROUP CONTROL
+//  PER-ARM CONTROL
 // ============================================================
-const grp={mode:"mit"};
-// The control step shows one panel per arm. `activeChannel` is the arm whose
-// group + per-motor controls are currently on screen; group commands only touch
-// that arm's motors so each arm is driven independently.
+// The control step shows one individual panel per arm. `activeChannel` is the
+// arm whose top actions + per-motor controls are currently on screen; the
+// top "Enable All" / "Return Home" actions only touch that arm's motors so
+// each arm is driven independently.
 let activeChannel=null;
 function ensureActiveChannel(){
   const present=channelsPresent();
@@ -1144,33 +1183,9 @@ async function broadcast(url, body){
     return post(url,Object.assign({channel,motor_id},body||{}));}));
 }
 const G=id=>document.getElementById(id);
-function grpApplyMode(){
-  if(!MODE_FIELDS[grp.mode]) grp.mode="mit";
-  document.querySelectorAll("#groupCard .grpctl").forEach(e=>
-    e.classList.toggle("hide", !MODE_FIELDS[grp.mode].includes(e.dataset.for)));
-  G("grpHint").textContent=MODE_HINT[grp.mode];
-}
-document.querySelectorAll("#grpMode button").forEach(b=>{
-  b.onclick=async()=>{
-    document.querySelectorAll("#grpMode button").forEach(x=>x.classList.remove("active"));
-    b.classList.add("active"); grp.mode=b.dataset.mode; grpApplyMode();
-    await broadcast("/api/mode",{mode:grp.mode});
-    flash(G("grpCmd"),"mode → "+grp.mode+" on "+armLabel(activeChannel));
-  };
-});
-function grpLink(rangeId,numId,key,valId){
-  const r=G(rangeId), n=numId?G(numId):null, v=valId?G(valId):null;
-  const push=()=>{const val=parseFloat(r.value); if(n)n.value=val; if(v)v.textContent=val;
-    broadcast("/api/target",{[key]:val});};
-  r.addEventListener("input",push);
-  if(n)n.addEventListener("change",()=>{r.value=n.value; push();});
-}
-grpLink("gPos","gnPos","pos"); grpLink("gVel","gnVel","vel"); grpLink("gVlim","gnVlim","vlim");
-grpLink("gKp",null,"kp","gKpVal"); grpLink("gKd",null,"kd","gKdVal");
-grpLink("gTau",null,"tau","gTauVal"); grpLink("gRatio",null,"ratio","gRatioVal");
 
-G("grpEnable").onclick=async()=>{
-  flash(G("grpCmd"),`enabling ${armLabel(activeChannel)} motors…`);
+G("indivEnable").onclick=async()=>{
+  flash(G("indivCmd"),`enabling ${armLabel(activeChannel)} motors…`);
   await Promise.all(activeUids().map(u=>{
     const {channel,motor_id}=splitUid(u);
     const c=cards[u], p=parseFloat(c.node.querySelector(".m-pos").textContent)||0;
@@ -1180,20 +1195,18 @@ G("grpEnable").onclick=async()=>{
     return post("/api/target",{channel,motor_id,pos:p,kp,kd});
   }));
   await broadcast("/api/enable");
-  flash(G("grpCmd"),`enabled ${armLabel(activeChannel)} ✓ (each holding its current angle)`);
+  flash(G("indivCmd"),`enabled ${armLabel(activeChannel)} ✓ (each holding its current angle)`);
 };
-G("grpDisable").onclick=async()=>{await broadcast("/api/disable");flash(G("grpCmd"),"disabled "+armLabel(activeChannel));};
-G("grpStop").onclick=async()=>{await post("/api/estop",{channel:activeChannel}); flash(G("grpCmd"),`E-STOP — ${armLabel(activeChannel)} torque off`,true);};
-G("grpHome").onclick=async()=>{
-  G("grpHome").disabled=true; flash(G("grpCmd"),`returning ${armLabel(activeChannel)} to home…`);
-  const r=await post("/api/home",{channel:activeChannel}); G("grpHome").disabled=false;
-  if(!r.ok){flash(G("grpCmd"),"return home failed: "+r.error,true);return;}
+async function returnArmHome(btn, cmd){
+  btn.disabled=true; flash(cmd,`returning ${armLabel(activeChannel)} to home…`);
+  const r=await post("/api/home",{channel:activeChannel}); btn.disabled=false;
+  if(!r.ok){flash(cmd,"return home failed: "+r.error,true);return;}
   activeUids().forEach(u=>{const c=cards[u]; if(!c)return;
     c.node.querySelector(".r-pos").value=0; c.node.querySelector(".n-pos").value=0;});
-  G("gPos").value=0; G("gnPos").value=0;
   const n=(r.homed||[]).length;
-  flash(G("grpCmd"),`returning ${n} motor${n===1?'':'s'} home`);
-};
+  flash(cmd,`returning ${n} motor${n===1?'':'s'} home`);
+}
+G("indivHome").onclick=()=>returnArmHome(G("indivHome"), G("indivCmd"));
 
 // ---- arm tabs (which arm's panel is shown) ----
 // renderArmTabs runs on every status frame, so only rebuild the buttons when
@@ -1243,68 +1256,36 @@ async function activateArm(ch){
   _activating=null;
 }
 
-// ---- view tabs (group vs individual) ----
-let viewMode="group";
-document.querySelectorAll("#viewTabs button").forEach(b=>{
-  b.onclick=()=>{ if(b.disabled) return; viewMode=b.dataset.view; applyView(); };
-});
+// ---- control view (one individual panel per arm) ----
 function applyView(){
   ensureActiveChannel();
   renderArmTabs();
-  const total=Object.keys(cards).length;
-  // Only the active arm's cards are visible; group needs 2+ on that arm.
+  // Only the active arm's cards are visible.
   let shown=0;
   Object.keys(cards).forEach(u=>{
     const onArm=String(splitUid(u).channel)===String(activeChannel);
     if(onArm) shown++;
-  });
-  const groupOk=shown>=2;
-  document.querySelectorAll("#viewTabs button").forEach(b=>{
-    const isGroup=b.dataset.view==="group";
-    b.disabled=isGroup && !groupOk;
-    b.title=(isGroup && !groupOk) ? "connect 2+ motors on this arm to use group control" : "";
-  });
-  const mode=groupOk ? viewMode : "individual";
-  document.querySelectorAll("#viewTabs button").forEach(b=>b.classList.toggle("active", b.dataset.view===mode));
-  G("groupCard").classList.toggle("hide", !(mode==="group" && groupOk));
-  G("motors").classList.toggle("hide", mode!=="individual");
-  G("viewTabsCard").classList.toggle("hide", total===0);
-  // Show only the active arm's motor cards.
-  Object.keys(cards).forEach(u=>{
-    const onArm=String(splitUid(u).channel)===String(activeChannel);
     cards[u].node.classList.toggle("hide", !onArm);
   });
-  G("grpTitleArm").textContent= twoArms() ? (" — "+armLabel(activeChannel)) : "";
+  G("indivActions").classList.toggle("hide", shown<1);
+  G("indivTitleArm").textContent= twoArms() ? (" — "+armLabel(activeChannel)) : "";
 }
-function updateGroupPanel(){
+function updateIndivActions(){
   ensureActiveChannel();
   const motors=activeUids().map(u=>motorsByUid[u]).filter(Boolean);
   if(motors.length<1) return;
-  G("grpCount").textContent=motors.length;
+  G("indivCount").textContent=motors.length;
   const anyOnline=motors.some(m=>m.state.online);
   const anyEnabled=motors.some(m=>m.enabled);
   const allEnabled=motors.every(m=>m.enabled && !m.estopped);
   const allEstop=motors.every(m=>m.estopped);
-  G("grpDot").className="dot"+(allEstop?"":(anyOnline?" on":(anyEnabled?" warn":"")));
-  // reflect live enable state on the buttons so it's obvious what's running
-  const be=G("grpEnable"), bd=G("grpDisable");
+  G("indivDot").className="dot"+(allEstop?"":(anyOnline?" on":(anyEnabled?" warn":"")));
+  // reflect live enable state on the button so it's obvious what's running
+  const be=G("indivEnable");
   be.classList.toggle("engaged", allEnabled);
   be.textContent = allEnabled ? "Enabled \u2713" : (anyEnabled ? "Enable Remaining" : "Enable All");
   be.disabled = allEnabled;
-  bd.disabled = !anyEnabled;
-  const posMin=Math.max(...motors.map(m=>m.limits.pos_min!=null?m.limits.pos_min:-m.limits.pmax));
-  const posMax=Math.min(...motors.map(m=>m.limits.pos_max!=null?m.limits.pos_max:m.limits.pmax));
-  const vmax=Math.min(...motors.map(m=>m.limits.vmax));
-  const tmax=Math.min(...motors.map(m=>m.limits.tmax));
-  G("gPos").min=posMin; G("gPos").max=posMax; G("gnPos").min=posMin; G("gnPos").max=posMax;
-  G("gVel").min=-vmax; G("gVel").max=vmax; G("gVlim").max=vmax;
-  G("gTau").min=-tmax; G("gTau").max=tmax;
-  document.querySelector(".gpos-min").textContent=(+posMin).toFixed(2);
-  document.querySelector(".gpos-max").textContent=(+posMax).toFixed(2);
-  document.querySelectorAll(".gvel-lim").forEach(e=>e.textContent=vmax);
-  document.querySelectorAll(".gtau-lim").forEach(e=>e.textContent=tmax);
 }
-grpApplyMode();
 
 // ---- gains preset (Kp / Kd) ----
 const GAINS_KEY="damiao.gains.default";
@@ -1322,8 +1303,6 @@ function applyGainsToCard(ctx, g){
   post("/api/target",{channel:ctx.channel, motor_id:ctx.id, kp:g.kp, kd:g.kd});
 }
 function applyGainsAll(g){
-  G("gKp").value=g.kp; G("gKpVal").textContent=g.kp;
-  G("gKd").value=g.kd; G("gKdVal").textContent=g.kd;
   Object.values(cards).forEach(ctx=>applyGainsToCard(ctx, g));
 }
 function reflectPreset(){
@@ -1345,6 +1324,25 @@ G("presetSave").onclick=()=>{
   flash(G("presetMsg"), `saved ✓ — new motors start at Kp ${defaultGains.kp} / Kd ${defaultGains.kd}`);
 };
 reflectPreset();
+
+// ---- show / hide live motor data (per-motor telemetry + graph) ----
+// Most users just want the joint sliders, so the live readouts (position,
+// velocity, torque, temperatures and the graph) are hidden by default and
+// revealed with this toggle. The slider's own "Currently at … rad" line stays
+// visible so you always see where the joint is.
+const LIVEDATA_KEY="motor.showLiveData";
+let showLiveData=false;
+try{ showLiveData=localStorage.getItem(LIVEDATA_KEY)==="1"; }catch(_){}
+function applyLiveDataVisibility(){
+  G("motors").classList.toggle("lite", !showLiveData);
+  G("showLiveData").checked=showLiveData;
+}
+G("showLiveData").onchange=()=>{
+  showLiveData=G("showLiveData").checked;
+  try{ localStorage.setItem(LIVEDATA_KEY, showLiveData?"1":"0"); }catch(_){}
+  applyLiveDataVisibility();
+};
+applyLiveDataVisibility();
 
 // ============================================================
 //  DOWNLOAD MOTOR DATA
@@ -1378,10 +1376,66 @@ async function downloadMotorData(){
 }
 G("btnDownloadData").onclick=downloadMotorData;
 
-document.getElementById("btnEstopAll").onclick=async()=>{
+async function triggerEstop(){
   await post("/api/estop",{});
   Object.values(cards).forEach(c=>flash(c.node.querySelector(".m-cmd"),"E-STOP — torque off",true));
+}
+document.getElementById("btnEstopAll").onclick=triggerEstop;
+
+// ---- E-stop hotkey (user-editable, persisted) ----
+// Default to the spacebar: big and easy to hit, and it never fires while the
+// user is typing because we ignore key events from inputs/editable fields.
+const ESTOP_HOTKEY_KEY="motor.estop.hotkey";
+const DEFAULT_ESTOP_HOTKEY=" ";
+function loadEstopHotkey(){
+  try{ const k=localStorage.getItem(ESTOP_HOTKEY_KEY); return k!=null?k:DEFAULT_ESTOP_HOTKEY; }
+  catch(_){ return DEFAULT_ESTOP_HOTKEY; }
+}
+let estopHotkey=loadEstopHotkey();
+let rebindingEstop=false;
+function hotkeyLabel(k){
+  if(k===" ") return "Space";
+  if(k==="Escape") return "Esc";
+  if(k==="ArrowUp") return "↑"; if(k==="ArrowDown") return "↓";
+  if(k==="ArrowLeft") return "←"; if(k==="ArrowRight") return "→";
+  return k.length===1 ? k.toUpperCase() : k;
+}
+function reflectEstopHotkey(){ G("estopHotkeyLabel").textContent=hotkeyLabel(estopHotkey); }
+function isTypingTarget(el){
+  if(!el) return false;
+  if(el.isContentEditable) return true;
+  const tag=el.tagName;
+  if(tag==="TEXTAREA" || tag==="SELECT") return true;
+  if(tag==="INPUT"){
+    // Only real text-entry inputs should swallow the E-stop hotkey. A focused
+    // range slider / checkbox must NOT block it (and pressing Space there used
+    // to scroll the page to the bottom instead of triggering the E-stop).
+    const t=(el.type||"text").toLowerCase();
+    return ["text","number","search","email","url","tel","password"].includes(t);
+  }
+  return false;
+}
+G("estopHotkeyBtn").onclick=()=>{
+  rebindingEstop=true;
+  G("estopHotkeyBtn").blur();
+  G("estopHotkeyLabel").textContent="press a key…";
 };
+window.addEventListener("keydown", e=>{
+  if(rebindingEstop){
+    if(["Shift","Control","Alt","Meta"].includes(e.key)) return;
+    e.preventDefault();
+    estopHotkey=e.key;
+    try{ localStorage.setItem(ESTOP_HOTKEY_KEY, estopHotkey); }catch(_){}
+    rebindingEstop=false; reflectEstopHotkey();
+    return;
+  }
+  if(isTypingTarget(document.activeElement)) return;
+  if(e.key.toLowerCase()===estopHotkey.toLowerCase()){
+    e.preventDefault();
+    triggerEstop();
+  }
+});
+reflectEstopHotkey();
 
 // ============================================================
 //  GUIDED TUTORIAL (spotlight walkthrough)
@@ -1390,32 +1444,18 @@ const TUT_KEY="motor.tutorial.seen";
 let tutSteps=[], tutIdx=0, tutActive=false;
 function tutResolve(sel){ const el=document.querySelector(sel); return (el && el.getClientRects().length) ? el : null; }
 function buildTutSteps(){
-  const groupVisible = !G("groupCard").classList.contains("hide");
-  const steps=[{sel:"#viewTabs", t:"Two ways to drive",
-    b:"Switch between controlling every motor together (Group) or fine-tuning each one on its own (Individual)."}];
-  if(groupVisible){
-    steps.push({sel:"#grpEnable", t:"Enable All",
-      b:"Powers on every motor so they hold their position and respond to your commands."});
-    steps.push({sel:'#groupCard .grpctl[data-for="pos"]', t:"Move the motors",
-      b:"Drag this slider to send all motors to a target position at the same time."});
-    steps.push({sel:"#grpHome", t:"Return Home",
-      b:"Smoothly drives every calibrated motor back to its zero (home) position."});
-    const adv=document.querySelector("#groupCard .advanced-settings");
-    if(adv) adv.open=true;
-    steps.push({sel:'#groupCard .grpctl[data-for="gains"] > div:first-child', t:"Stiffness (Kp)",
-      b:"How firmly the motors hold their target. Higher stiffness snaps to position harder and resists being pushed; lower feels softer and more compliant."});
-    steps.push({sel:'#groupCard .grpctl[data-for="gains"] > div:last-child', t:"Damping (Kd)",
-      b:"How much the motors resist fast motion. Higher damping smooths movement and reduces overshoot or oscillation; lower lets them move more freely."});
-    steps.push({sel:"#grpDisable", t:"Disable All",
-      b:"Releases the motors so they go limp \u2014 no holding torque."});
-  } else {
-    steps.push({sel:"#motors .motor-card .m-enable", t:"Enable",
-      b:"Powers on this motor so it holds its position and responds to your commands."});
-    steps.push({sel:'#motors .motor-card .ctl[data-for="pos"]', t:"Move the motor",
-      b:"Drag this slider to send the motor to a target position."});
-    steps.push({sel:"#motors .motor-card .m-disable", t:"Disable",
-      b:"Releases the motor so it goes limp \u2014 no holding torque."});
-  }
+  const steps=[
+    {sel:"#indivEnable", t:"Enable All",
+      b:"Powers on every motor on this arm so they hold their position and respond to your commands."},
+    {sel:"#indivHome", t:"Return Home",
+      b:"Smoothly drives every calibrated motor on this arm back to its zero (home) position."},
+    {sel:"#motors .motor-card .m-enable", t:"Enable one motor",
+      b:"Powers on just this motor so it holds its position and responds to your commands."},
+    {sel:'#motors .motor-card .ctl[data-for="pos"]', t:"Move the motor",
+      b:"Drag this slider to send the motor to a target position."},
+    {sel:"#motors .motor-card .m-disable", t:"Disable",
+      b:"Releases the motor so it goes limp \u2014 no holding torque."},
+  ];
   steps.push({sel:"#btnEstopAll", t:"Emergency stop",
     b:"Instantly cuts all torque on every motor. Hit this any time something looks wrong \u2014 it\u2019s always available at the top of the screen."});
   return steps.filter(s=>tutResolve(s.sel));
@@ -1585,6 +1625,7 @@ function updateMcLive(){
 function render(status){
   latest=status; const motors=status.motors||[];
   motorsByUid={}; motors.forEach(m=>motorsByUid[uidOf(m)]=m);
+  armSides=status.arm_sides||{};
 
   // control cards (keyed by uid so both arms coexist)
   const uids=new Set(motors.map(m=>uidOf(m)));
@@ -1597,7 +1638,7 @@ function render(status){
   renderCalList();
   updateCalStep();
   updateMcLive();
-  updateGroupPanel();
+  updateIndivActions();
   if(currentStep==="control") applyView();
   updateStepper();
 

@@ -135,6 +135,29 @@ def api_activate():
     return _ok(status=st)
 
 
+@app.route("/api/arm_side", methods=["POST"])
+def api_arm_side():
+    # Mark an arm (channel) as "left" or "right" so reverse-only calibration
+    # sweeps away from the body in the correct direction.
+    body = request.get_json(silent=True) or {}
+    try:
+        st = service.set_arm_side(_chan(body), body.get("side"))
+    except Exception as e:
+        return _err(e, 400)
+    return _ok(status=st)
+
+
+@app.route("/api/identify_arm", methods=["POST"])
+def api_identify_arm():
+    # Briefly wiggle a motor on this arm so the user can tell which is which.
+    body = request.get_json(silent=True) or {}
+    try:
+        res = service.identify_arm(_chan(body)) or {}
+    except Exception as e:
+        return _err(e, 500)
+    return _ok(**res)
+
+
 @app.route("/api/estop", methods=["POST"])
 def api_estop():
     body = request.get_json(silent=True) or {}

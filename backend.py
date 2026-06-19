@@ -114,11 +114,22 @@ CAL_J4_CENTER_KP = _env_float("CAL_J4_CENTER_KP", CAL_MIT_MAX_KP)
 # J4 only auto-finds its BACK hardstop; the forward extent is taken from the
 # saved calibration span (or this default if nothing has been saved yet), so we
 # never drive J4 into the front stop or require a manual mark.
-CAL_J4_DEFAULT_SPAN_RAD = _env_float("CAL_J4_DEFAULT_SPAN_RAD", 1.93904)
-# J1 only auto-finds its REVERSE (rear) hardstop -- it must never sweep forward.
-# Zero is set at that rear stop and the forward extent uses the saved span (or
-# this default). J1's "home" is no power (limp), so it is never driven/centered.
+CAL_J4_DEFAULT_SPAN_RAD = _env_float("CAL_J4_DEFAULT_SPAN_RAD", 2.18)
+# Some joints can only auto-find their REVERSE (rear) hardstop -- sweeping
+# forward would just drive them into the arm body. For these joints we sweep
+# reverse only, set zero at the rear stop, take the forward extent from the
+# saved span (or the per-joint default below), and never center them.
 CAL_J1_DEFAULT_SPAN_RAD = _env_float("CAL_J1_DEFAULT_SPAN_RAD", 3.14159)
+CAL_REVERSE_ONLY_JOINTS = {1, 2}
+# Only these joints flip their sweep direction with arm handedness. Joint 1 is
+# NOT side-dependent -- it always sweeps reverse, exactly as before.
+CAL_SIDE_DEPENDENT_JOINTS = {2}
+CAL_REVERSE_ONLY_DEFAULT_SPAN = {
+    1: CAL_J1_DEFAULT_SPAN_RAD,
+    2: _env_float("CAL_J2_DEFAULT_SPAN_RAD", 3.14159),
+}
+# Joints whose "home" is no power (left limp) instead of being driven to zero.
+CAL_LIMP_HOME_JOINTS = {1}
 CAL_PROGRESS_EPS_RAD = 0.01
 CAL_EFFORT_STAGE_SCALES = (1.0, 1.35, 1.75, 2.20)
 CAL_JOINT_PROFILES = {
@@ -133,6 +144,10 @@ CAL_JOINT_PROFILES = {
 CALIBRATION_STORE_PATH = Path(os.environ.get(
     "DM_CALIBRATION_STORE",
     str(Path(__file__).with_name("calibrations.json"))))
+ARM_SIDES_STORE_PATH = Path(os.environ.get(
+    "DM_ARM_SIDES_STORE",
+    str(Path(__file__).with_name("arm_sides.json"))))
+ARM_SIDES = ("left", "right")
 
 
 def _clamp(x, lo, hi):
@@ -256,6 +271,9 @@ class MotorService:
         # adapter can share overlapping CAN ids (e.g. joint 5 on both arms).
         self.motors: "Dict[tuple, _MotorHandle]" = {}
         self._calibration_store = self._load_calibration_store()
+        # Per-channel arm handedness ("left"/"right"). A right arm is the mirror
+        # of a left arm, so reverse-only joints must sweep the opposite way.
+        self._arm_sides = self._load_arm_sides()
 
         # The DM-USB2FDCAN dual adapter only services ONE CAN channel at a time:
         # opening a second controller while the first is open makes both talk to
@@ -328,6 +346,73 @@ class MotorService:
             json.dump(self._calibration_store, f, indent=2, sort_keys=True)
             f.write("\n")
         tmp.replace(CALIBRATION_STORE_PATH)
+
+    def _load_arm_sides(self) -> dict:
+        try:
+            with ARM_SIDES_STORE_PATH.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return {}
+            return {str(k): str(v) for k, v in data.items() if v in ARM_SIDES}
+        except FileNotFoundError:
+            return {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _write_arm_sides(self):
+        ARM_SIDES_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ARM_SIDES_STORE_PATH.with_suffix(ARM_SIDES_STORE_PATH.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(self._arm_sides, f, indent=2, sort_keys=True)
+            f.write("\n")
+        tmp.replace(ARM_SIDES_STORE_PATH)
+
+    def get_arm_side(self, channel) -> str:
+        """Handedness of an arm; defaults to 'left' (the original sweep dir)."""
+        with self.lock:
+            return self._arm_sides.get(str(channel), "left")
+
+    def set_arm_side(self, channel, side):
+        side = str(side).lower()
+        if side not in ARM_SIDES:
+            raise ValueError(f"side must be one of {ARM_SIDES}, got {side!r}")
+        with self.lock:
+            self._arm_sides[str(channel)] = side
+            self._write_arm_sides()
+        return self.status()
+
+    def identify_arm(self, channel):
+        """Briefly wiggle a motor on this arm so the user can see which physical
+        arm a channel maps to."""
+        return self._submit(lambda: self._do_identify_arm(channel), timeout=20.0)
+
+    def _do_identify_arm(self, channel):
+        self._activate(channel)
+        cands = sorted(
+            [mh for mh in self.motors.values()
+             if str(mh.channel) == str(channel) and mh._motor is not None],
+            key=lambda m: m.motor_id)
+        if not cands:
+            raise RuntimeError(f"no connected motors on channel {channel}")
+        mh = cands[0]
+        st = self._feedback_now(mh)
+        base = float(st.pos) if st is not None else 0.0
+        amp = 0.12  # ~7 degrees: small but visible
+        kp, kd = 4.0, 0.6
+        # This runs ON the worker thread, so the normal _tick loop is paused
+        # while we're here -- we must drive the motor with send_mit directly
+        # (just like the calibration sweeps) instead of relying on the tick.
+        self._enable_for_calibration(mh, "mit")
+        try:
+            for target in (base + amp, base - amp, base + amp, base):
+                t_end = time.time() + 0.4
+                while time.time() < t_end:
+                    mh._motor.send_mit(target, 0.0, kp, kd, 0.0)
+                    self._feedback_now(mh)
+                    time.sleep(0.02)
+        finally:
+            self._disable_after_calibration(mh)
+        return {"channel": str(channel), "motor_id": mh.motor_id}
 
     def _apply_saved_calibration(self, mh: _MotorHandle):
         saved = self._calibration_store.get(self._cal_key(mh.channel, mh.motor_id))
@@ -1349,59 +1434,74 @@ class MotorService:
             message=f"auto calibration at {speed:.2f} rad/s "
                     f"(Kp {kp:.1f}, lead {lead:.2f})", error=None,
             result=None)
-        is_j1 = int(motor_id) == 1
+        is_reverse_only = int(motor_id) in CAL_REVERSE_ONLY_JOINTS
+        is_limp_home = int(motor_id) in CAL_LIMP_HOME_JOINTS
         is_j4 = int(motor_id) == 4
+        side = self.get_arm_side(channel)
+        # Side-dependent joints (joint 2) sweep AWAY from the arm body to their
+        # single hardstop. On a left arm that's reverse (-1); a right arm is
+        # mirrored, so "away from body" is forward (+1). Joint 1 is NOT
+        # side-dependent and always sweeps reverse, unchanged.
+        sweep_dir = 1 if (int(motor_id) in CAL_SIDE_DEPENDENT_JOINTS
+                          and side == "right") else -1
         method = "auto"
         try:
             self._enable_for_calibration(mh, "mit")
-            low = self._sweep_to_hardstop(
-                mh, -1, speed, max_s, "finding low stop", kp, kd, lead)
-            self._set_calibration(
-                mh, active=True, phase="found low stop",
-                message=f"low hardstop at {low:.3f} rad")
-            time.sleep(0.25)
-            self._raise_if_calibration_stopped(mh)
-            if is_j1:
-                # J1 only sweeps reverse to its rear stop -- never forward. The
-                # forward extent comes from the saved span (or the default).
-                method = "j1_reverse_only_limp"
-                span = self._saved_span(mh) or CAL_J1_DEFAULT_SPAN_RAD
-                high = low + span
+            if is_reverse_only:
+                method = f"j{int(motor_id)}_reverse_only_{side}"
+                side_note = (f" ({side} arm)"
+                             if int(motor_id) in CAL_SIDE_DEPENDENT_JOINTS else "")
+                stop = self._sweep_to_hardstop(
+                    mh, sweep_dir, speed, max_s, "finding hardstop", kp, kd, lead)
                 self._set_calibration(
-                    mh, active=True, phase="using saved front",
-                    message=f"J1 rear stop at {low:.3f} rad; using span "
-                            f"{span:.3f} rad for the forward extent (left limp)")
-            elif is_j4:
-                # J4 must not drive into its front stop, so reuse the saved span
-                # (or the configured default) to place the forward extent.
-                method = "j4_back_saved_front"
-                span = self._saved_span(mh) or CAL_J4_DEFAULT_SPAN_RAD
-                high = low + span
+                    mh, active=True, phase="found hardstop",
+                    message=f"hardstop at {stop:.3f} rad{side_note}")
+                time.sleep(0.25)
+                self._raise_if_calibration_stopped(mh)
+                span = (self._saved_span(mh)
+                        or CAL_REVERSE_ONLY_DEFAULT_SPAN.get(int(motor_id),
+                                                             CAL_J1_DEFAULT_SPAN_RAD))
+                # Usable travel runs `span` from the stop, toward the body.
+                far = stop - sweep_dir * span
+                low, high = min(stop, far), max(stop, far)
+                center = stop  # zero sits at the away-from-body hardstop
+                limp_note = " (left limp)" if is_limp_home else ""
                 self._set_calibration(
-                    mh, active=True, phase="using saved front",
-                    message=f"J4 back stop at {low:.3f} rad; using saved span "
-                            f"{span:.3f} rad for the front extent")
+                    mh, active=True, phase="using saved extent",
+                    message=f"J{int(motor_id)} stop at {stop:.3f} rad; using span "
+                            f"{span:.3f} rad toward the body{limp_note}")
             else:
-                high = self._sweep_to_hardstop(
-                    mh, 1, speed, max_s, "finding high stop", kp, kd, lead)
+                low = self._sweep_to_hardstop(
+                    mh, -1, speed, max_s, "finding low stop", kp, kd, lead)
+                self._set_calibration(
+                    mh, active=True, phase="found low stop",
+                    message=f"low hardstop at {low:.3f} rad")
+                time.sleep(0.25)
+                self._raise_if_calibration_stopped(mh)
+                if is_j4:
+                    # J4 must not drive into its front stop, so reuse the saved
+                    # span (or the configured default) for the forward extent.
+                    method = "j4_back_saved_front"
+                    span = self._saved_span(mh) or CAL_J4_DEFAULT_SPAN_RAD
+                    high = low + span
+                    self._set_calibration(
+                        mh, active=True, phase="using saved front",
+                        message=f"J4 back stop at {low:.3f} rad; using saved span "
+                                f"{span:.3f} rad for the front extent")
+                else:
+                    high = self._sweep_to_hardstop(
+                        mh, 1, speed, max_s, "finding high stop", kp, kd, lead)
+                center = (low + high) / 2.0
             span = abs(high - low)
             if span < CAL_MIN_SPAN_RAD:
                 raise RuntimeError(
                     f"hardstop span too small ({span:.3f} rad); check motion path")
-            if is_j1:
-                # Zero sits at the rear hardstop; the usable range runs forward
-                # from there. J1 is never centered -- it is left limp at the stop.
-                center = low
-                pos_min = 0.0
-                pos_max = span
-            else:
-                center = (low + high) / 2.0
-                pos_min = min(low, high) - center
-                pos_max = max(low, high) - center
+            pos_min = min(low, high) - center
+            pos_max = max(low, high) - center
             move_timeout = max(30.0, span / speed + 15.0)
             self._raise_if_calibration_stopped(mh)
-            if is_j1:
-                # No centering move: leave it sitting at the rear stop, no power.
+            if is_reverse_only:
+                # No centering move: leave it sitting at the rear stop.
                 pass
             elif is_j4:
                 # Position mode reaches the midpoint reliably from the back stop;
@@ -1456,7 +1556,8 @@ class MotorService:
             self._save_calibration(mh, result, method)
             self._set_calibration(
                 mh, active=False, phase="complete",
-                message="rear-stop zero calibrated (left limp)" if is_j1
+                message=("rear-stop zero calibrated"
+                         + (" (left limp)" if is_limp_home else "")) if is_reverse_only
                         else "midpoint zero calibrated", result=result,
                 saved_at=self._calibration_store.get(self._cal_key(mh.channel, mh.motor_id), {}).get("saved_at"))
             return result
@@ -1488,8 +1589,8 @@ class MotorService:
                     continue
                 if mh._motor is None:
                     continue
-                if mh.motor_id == 1:
-                    # J1's home is no power: cut torque and leave it limp.
+                if mh.motor_id in CAL_LIMP_HOME_JOINTS:
+                    # Home is no power for these joints: cut torque, leave limp.
                     self._do_disable(mh.channel, mh.motor_id)
                     homed.append({"channel": mh.channel,
                                   "motor_id": mh.motor_id, "limp": True})
@@ -1700,6 +1801,7 @@ class MotorService:
                 "device_type": self.device_type,
                 "channel": self.channel,
                 "active_channel": self._active_channel,
+                "arm_sides": dict(self._arm_sides),
                 "fault": self.fault,
                 "connected": bool(self.motors),
                 "motors": motors,

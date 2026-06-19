@@ -8,9 +8,36 @@ through setup from a clean machine, day-to-day operation, and a detailed
 **troubleshooting** section for when something misbehaves (replugging, restarting
 the terminal, re-calibrating, recovering from faults, and so on).
 
-> **TL;DR for a machine that's already set up:** open a terminal in this folder
-> and run `./run.sh`, then open <http://127.0.0.1:5000> and follow the on-screen
-> wizard: **Choose arm → Scan → Connect All → Calibrate All → Controls**.
+## Where to start
+
+- **Setting up a new machine?** Go straight to **[Section 3 — First-time setup
+  (clean machine)](#3-first-time-setup-clean-machine)**. You only do it once.
+- **Machine already set up?** Open a terminal in this folder and run `./run.sh`,
+  then open <http://127.0.0.1:5000> and follow the on-screen wizard:
+  **Choose arm → Scan → Connect All → Set arm side → Calibrate → Controls**.
+
+## Contents
+
+1. [What this is and how it's wired](#1-what-this-is-and-how-its-wired)
+2. [What's in this folder](#2-whats-in-this-folder)
+3. [First-time setup (clean machine)](#3-first-time-setup-clean-machine)
+4. [Plug-in checklist (every session)](#4-plug-in-checklist-do-this-every-session)
+5. [Running the dashboard (every day)](#5-running-the-dashboard-every-day)
+6. [Using the dashboard — step by step](#6-using-the-dashboard--step-by-step)
+7. [Safety notes](#7-safety-notes-please-read)
+8. [Troubleshooting](#8-troubleshooting)
+   - [Adapter not detected / scan finds nothing](#81-can-adapter-not-detected--scan-finds-nothing)
+   - [A motor doesn't show up in the scan](#82-a-motor-doesnt-show-up-in-the-scan)
+   - [A motor won't enable / keeps dropping out](#83-a-motor-connects-but-wont-enable--keeps-dropping-out)
+   - [A motor shows a hardware fault](#84-a-motor-shows-a-hardware-fault)
+   - [Calibration fails](#85-calibration-fails-no-hardstop-detected-span-too-small-etc)
+   - [Re-calibrate a joint from scratch](#86-i-need-to-re-calibrate-a-joint-from-scratch)
+   - [Web page won't load / "address already in use"](#87-the-web-page-wont-load--address-already-in-use)
+   - [Dashboard frozen / telemetry stopped](#88-the-dashboard-is-frozen-telemetry-stopped-or-its-just-acting-weird)
+   - ["ModuleNotFoundError" / app won't start](#89-modulenotfounderror-or-the-app-wont-start)
+   - [Getting help / reporting a problem](#810-getting-help--reporting-a-problem)
+9. [Advanced: environment overrides](#9-advanced-environment-overrides)
+10. [Quick reference](#10-quick-reference)
 
 ---
 
@@ -58,14 +85,16 @@ first** (see Troubleshooting).
 | `templates/index.html` | The dashboard web page you interact with. |
 | `requirements.txt` | The Python packages the app needs. |
 | `calibrations.json` | Saved calibration for each joint. **Auto-generated — don't hand-edit.** |
+| `arm_sides.json` | Saved Left/Right side for each arm (channel). **Auto-generated — don't hand-edit.** |
 | `probe_arms.py` | Diagnostic script to list which motors answer on each channel. |
 
 ---
 
 ## 3. First-time setup (clean machine)
 
-You only need to do this **once** per computer. If your machine is already set
-up, skip to [Section 5: Running the dashboard](#5-running-the-dashboard-every-day).
+> **START HERE on a new machine.** Run these five steps once, in order, then you
+> never need them again. Already set up? Skip to
+> [Section 5: Running the dashboard](#5-running-the-dashboard-every-day).
 
 ### Requirements
 
@@ -171,8 +200,9 @@ To stop the dashboard, return to the terminal and press **Ctrl-C**.
 
 ## 6. Using the dashboard — step by step
 
-The dashboard guides you through a wizard: **Choose arm → Connect → Calibrate →
-Controls**. There's also a built-in tutorial (look for **ⓘ Show tutorial**).
+The dashboard guides you through a wizard: **Choose arm → Connect → Set arm side
+→ Calibrate → Controls**. There's also a built-in tutorial (look for
+**ⓘ Show tutorial**).
 
 ### Step 6.1 — Choose your arm
 
@@ -200,6 +230,21 @@ When at least one motor is connected, click **Continue to Calibration →**.
 Calibration finds each joint's **range of motion** and sets its **zero point**.
 After calibration, the UI sliders and the backend both refuse to drive a joint
 past its real hardstops — this is an important safety feature.
+
+**First, set each arm's side (OpenArm only):** at the top of the Calibrate step
+you'll see an **Arm orientation** panel. Some joints (notably **J2**) can only
+auto-find one hardstop and must sweep *away from the body* — which way that is
+depends on whether the arm is the **left** or **right** one. For every connected
+arm:
+
+1. Not sure which physical arm a tab is? Click **Wiggle** — the arm that twitches
+   is the one you're setting.
+2. Pick **Left** or **Right**. The choice is saved (`arm_sides.json`) and reused
+   next time.
+
+The **Calibrate** buttons stay disabled until each arm that has a J2 has its side
+set, so you can't accidentally drive J2 into the body. (Aloha arms skip this —
+their joints are marked by hand.)
 
 **OpenArm (automatic):**
 
@@ -230,8 +275,16 @@ every session unless something changes.
 
 ### Step 6.4 — Controls
 
-You get a card for **each joint** (J1…J8) plus a **Group** tab to drive all
-connected joints together.
+You get a card for **each joint** (J1…J8). Two view tabs at the top switch
+between:
+
+- **All Motors** — bulk actions for the whole arm at once: **Enable All**,
+  **Disable All**, **Return Home**, and **Stop All**.
+- **Individual** — the per-joint cards, where you fine-tune one joint at a time.
+
+By default each joint card shows just the move slider (and a *Currently at … rad*
+readout). Tick **Show live motor data** to also reveal the live position,
+velocity, torque, temperatures, and rolling plot for every motor.
 
 > **Two-arm setups:** if more than one arm is detected, a row of **arm tabs**
 > appears at the top of the controls so you can switch between them. An arm that
@@ -259,13 +312,17 @@ Other handy controls:
 - **Default Kp/Kd preset** — set comfortable gains once and apply to all joints.
 - **Show tutorial** — replays the guided walkthrough.
 
-Live position / velocity / torque, motor temperatures, and a rolling plot update
-about 20 times a second.
+With **Show live motor data** enabled, position / velocity / torque, motor
+temperatures, and a rolling plot update about 20 times a second.
 
 ### The big red button: EMERGENCY STOP
 
 **E-STOP ALL** (top-right, always visible) **immediately cuts torque to every
 motor** and zeroes all setpoints. Use it any time something looks wrong.
+
+There's also a **keyboard shortcut** — press **Space** anywhere (except while
+typing in a field) to fire the E-stop. You can rebind it with the **E-stop key:**
+button in the header: click it, then press the key you want.
 
 E-STOP is **latching**: once pressed, motors stay disabled until you explicitly
 **Enable** them again. This is intentional — it prevents a motor from silently
@@ -467,7 +524,7 @@ Most people never need these. They're set as environment variables before
 | --- | --- |
 | Start the dashboard | `./run.sh`, open <http://127.0.0.1:5000> |
 | Stop the dashboard | **Ctrl-C** in the terminal |
-| Stop a motor now | **E-STOP ALL** (then **Enable** to recover) |
+| Stop a motor now | **E-STOP ALL** or press **Space** (then **Enable** to recover) |
 | Find missing motors | `./venv/bin/python probe_arms.py` |
 | Re-calibrate a joint | **Clear calibration** → **Calibrate** |
 | Re-calibrate everything | **Re-calibrate All** (or `rm calibrations.json`) |
