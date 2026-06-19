@@ -190,6 +190,21 @@ def api_mode():
     return _ok()
 
 
+@app.route("/api/reset_params", methods=["POST"])
+def api_reset_params():
+    body = request.get_json(silent=True) or {}
+    kp = body.get("kp")
+    kd = body.get("kd")
+    try:
+        service.reset_params(
+            _chan(body), _mid(body),
+            kp=float(kp) if kp is not None else None,
+            kd=float(kd) if kd is not None else None)
+    except Exception as e:
+        return _err(e, 500)
+    return _ok()
+
+
 @app.route("/api/target", methods=["POST"])
 def api_target():
     body = request.get_json(silent=True) or {}

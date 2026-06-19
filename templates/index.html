@@ -507,6 +507,8 @@
         <input type="range" class="r-ratio" min="0" max="1" step="0.01" value="1">
         <div class="sliderval"><span>0</span><span class="ratio-val">1</span><span>1</span></div>
       </div>
+      <button class="m-reset btn-warn" style="margin-top:14px;width:100%">Reset parameters to default</button>
+      <p class="muted" style="margin:6px 0 0;font-size:11.5px">Restores Kp/Kd, velocity, torque, velocity limit, force ratio and mode to their defaults. Calibration and position are kept.</p>
       <button class="m-remove btn-ghost" style="margin-top:14px;width:100%">Disconnect this motor</button>
     </div>
   </details>
@@ -1103,6 +1105,20 @@ function makeCard(u){
   };
   q(".m-disable").onclick=async()=>{await post("/api/disable",{channel,motor_id});flash(q(".m-cmd"),"disabled");};
   q(".m-remove").onclick=async()=>{ await post("/api/disable",{channel,motor_id}); await post("/api/disconnect",{channel,motor_id}); };
+  q(".m-reset").onclick=async()=>{
+    const g=defaultGains;
+    // snap every tunable control on this card back to its default
+    q(".r-kp").value=g.kp; q(".kp-val").textContent=g.kp;
+    q(".r-kd").value=g.kd; q(".kd-val").textContent=g.kd;
+    q(".r-vel").value=0; q(".n-vel").value=0;
+    q(".r-vlim").value=2; q(".n-vlim").value=2;
+    q(".r-tau").value=0; q(".tau-val").textContent=0;
+    q(".r-ratio").value=1; q(".ratio-val").textContent=1;
+    qa(".m-mode button").forEach(x=>x.classList.toggle("active",x.dataset.mode==="mit"));
+    ctx.mode="mit"; applyMode();
+    const r=await post("/api/reset_params",{channel,motor_id,kp:g.kp,kd:g.kd});
+    flash(q(".m-cmd"), r.ok?`parameters reset to default (Kp ${g.kp} / Kd ${g.kd})`:"reset failed: "+r.error, !r.ok);
+  };
 
   function setLimits(l){
     ctx.lims=l;

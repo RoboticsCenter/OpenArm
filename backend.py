@@ -1822,6 +1822,33 @@ class MotorService:
             mh._mode_applied = None  # worker re-applies on next tick
             mh.max_power = False
 
+    def reset_params(self, channel, motor_id, kp=None, kd=None):
+        """Restore a motor's tunable parameters to their defaults.
+
+        Tweaking Kp/Kd/velocity/torque can leave a joint behaving erratically
+        (e.g. overshooting its soft limits), so this puts every adjustable
+        setpoint -- velocity, feed-forward torque, velocity limit, force ratio,
+        the Kp/Kd gains and the control mode -- back to a known-safe baseline.
+        The Kp/Kd defaults are supplied by the caller (the UI's saved preset);
+        if omitted they fall back to the blank setpoint values. The current
+        position target and the motor's calibration / soft limits are left
+        untouched so the joint holds where it is and stays within its range."""
+        mh = self._require(channel, motor_id)
+        blank = _blank_sp()
+        with self.lock:
+            mh.sp["vel"] = blank["vel"]
+            mh.sp["tau"] = blank["tau"]
+            mh.sp["vlim"] = blank["vlim"]
+            mh.sp["ratio"] = blank["ratio"]
+            mh.sp["kp"] = (blank["kp"] if kp is None
+                           else _clamp(float(kp), 0.0, 500.0))
+            mh.sp["kd"] = (blank["kd"] if kd is None
+                           else _clamp(float(kd), 0.0, 5.0))
+            mh.mode = "mit"
+            mh._mode_applied = None  # worker re-applies on next tick
+            mh.max_power = False
+        return self.status()
+
     def set_targets(self, channel, motor_id, **kw):
         mh = self._require(channel, motor_id)
         with self.lock:
