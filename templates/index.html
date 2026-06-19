@@ -575,6 +575,13 @@ function channelsPresent(){
   const s=new Set(Object.values(motorsByUid).map(m=>String(m.channel!=null?m.channel:"0")));
   return [...s].sort();
 }
+// Arms the dashboard knows about = currently connected ∪ found in the last scan.
+// Lets us show (but disable) an arm's tab when the hardware exists but nothing
+// on it is connected yet.
+function knownChannels(){
+  const s=new Set([...channelsPresent(), ...foundChannels()]);
+  return [...s].sort();
+}
 function twoArms(){ return channelsPresent().length>1; }
 
 // ---- friendly names (stored locally per motor uid) ----
@@ -1198,18 +1205,23 @@ let _armTabsSig=null;
 // handlers were getting lost / out-paced by status-frame re-renders).
 G("armTabs").addEventListener("click", e=>{
   const b=e.target.closest("button[data-channel]");
-  if(b) activateArm(b.dataset.channel);
+  if(b && !b.disabled) activateArm(b.dataset.channel);
 });
 function renderArmTabs(){
-  const present=channelsPresent();
+  const known=knownChannels();
+  const connected=new Set(channelsPresent());
   const wrap=G("armTabs");
-  G("armTabsCard").classList.toggle("hide", present.length<2);
-  const sig=present.join(",");
+  // Show the selector whenever 2+ arms exist (even if one isn't connected yet).
+  G("armTabsCard").classList.toggle("hide", known.length<2);
+  const sig=known.join(",")+"|"+[...connected].sort().join(",");
   if(sig!==_armTabsSig){
     wrap.innerHTML="";
-    present.forEach(ch=>{
+    known.forEach(ch=>{
       const b=document.createElement("button");
       b.dataset.channel=ch; b.textContent=armLabel(ch);
+      // An arm with no connected motors is shown but disabled.
+      b.disabled=!connected.has(ch);
+      b.title=b.disabled ? ("No motors connected on "+armLabel(ch)) : "";
       wrap.appendChild(b);
     });
     _armTabsSig=sig;

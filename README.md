@@ -233,6 +233,12 @@ every session unless something changes.
 You get a card for **each joint** (J1…J8) plus a **Group** tab to drive all
 connected joints together.
 
+> **Two-arm setups:** if more than one arm is detected, a row of **arm tabs**
+> appears at the top of the controls so you can switch between them. An arm that
+> was found during the scan but has **no motors connected yet** shows up as a
+> **greyed-out (disabled) tab** — that's normal. Connect its motors (back in the
+> Connect step) and the tab becomes selectable.
+
 For each joint:
 
 1. **Enable** — energizes the motor.
