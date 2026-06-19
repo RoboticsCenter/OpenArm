@@ -72,6 +72,26 @@ The USB adapter only carries **data**. Each motor needs its **own power supply**
 detected but won't energize or keeps dropping out, **check the power supply
 first** (see Troubleshooting).
 
+### How it's wired (photo guide)
+
+The motors come **already plugged into each other** — you only need to connect
+two things: the **USB-to-CAN adapter** (data) and the **power board** (24 V).
+
+**1. The USB-to-CAN adapter.** Its **USB-C** cable runs to the computer. The
+**two CAN data cables** out the top each go to a power board (one per arm).
+
+![USB-to-CAN adapter: USB-C to the computer, two CAN data cables out the top to the power board](docs/images/usb-can-adapter-annotated.png)
+
+**2. The power board.** Three things connect here:
+
+- **To the motors** — the bundle along the top (one thick lead) is **already
+  plugged into the motor**; just plug the other end into the board.
+- **CAN data** — the skinny connector on the side is the **same cable that comes
+  off the top of the adapter** above.
+- **Power in (24 V)** — plugs into the **yellow** connector.
+
+![Power board: motor cable on top, CAN data from the USB adapter on the side, 24V power into the yellow connector](docs/images/power-distribution-board-annotated.png)
+
 ---
 
 ## 2. What's in this folder
