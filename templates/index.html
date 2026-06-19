@@ -178,16 +178,6 @@
   .tut-skip{position:fixed;top:16px;right:18px;z-index:2002;background:rgba(20,26,38,.92);border:1px solid var(--line);
         color:var(--txt);padding:9px 15px;border-radius:10px;font-size:13px;width:auto;font-weight:600}
 
-  /* ---- arm selection ---- */
-  .arm-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  @media(max-width:640px){.arm-grid{grid-template-columns:1fr}}
-  .arm-opt{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:28px 20px;
-        background:var(--panel2);border:1px solid var(--line);border-radius:16px;color:var(--txt);transition:.15s}
-  .arm-opt:hover{border-color:var(--accent);transform:translateY(-2px)}
-  .arm-emoji{font-size:42px;line-height:1}
-  .arm-name{font-size:19px;font-weight:800}
-  .arm-desc{font-size:13px;color:var(--muted);font-weight:500;line-height:1.5;max-width:260px}
-
   /* ---- manual calibration ---- */
   .mark-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
   .mark-box{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center}
@@ -201,7 +191,6 @@
 <header>
   <h1>Motor <span>Control</span></h1>
   <div class="hdr-actions">
-    <button id="armPill" class="pill" style="cursor:pointer" title="Change arm type"><span id="armIcon">&#129482;</span><span id="armName">choose arm</span></button>
     <span class="pill"><span id="busDot" class="dot"></span><span id="busTxt">no motors</span></span>
     <button id="btnEstopAll" class="btn-estop">&#9632; E-STOP ALL</button>
     <button id="estopHotkeyBtn" class="pill" style="cursor:pointer" title="Click, then press a key to rebind the E-stop hotkey">E-stop key: <b id="estopHotkeyLabel">Space</b></button>
@@ -209,26 +198,6 @@
 </header>
 
 <div class="wrap">
-  <!-- Arm selection (shown first) -->
-  <section id="armSelect" class="hide">
-    <div class="card" style="max-width:780px;margin:24px auto">
-      <h3 class="step-head" style="text-align:center">Which arm do you have?</h3>
-      <p class="step-sub" style="text-align:center;margin:0 auto 24px">Choose your hardware so we set up the right calibration workflow. You can change this anytime from the top bar.</p>
-      <div class="arm-grid">
-        <button class="arm-opt" data-arm="openarm">
-          <div class="arm-emoji">&#129482;</div>
-          <div class="arm-name">OpenArm</div>
-          <div class="arm-desc">Automatic hardstop calibration &mdash; one button finds each joint's range and sets zero.</div>
-        </button>
-        <button class="arm-opt" data-arm="aloha">
-          <div class="arm-emoji">&#129302;</div>
-          <div class="arm-name">Aloha</div>
-          <div class="arm-desc">Manual calibration &mdash; drive each joint to its hardstops, mark them, and it zeroes for you.</div>
-        </button>
-      </div>
-    </div>
-  </section>
-
   <div id="wizard">
   <!-- Progress stepper -->
   <ol class="stepper" id="stepper">
@@ -1587,22 +1556,15 @@ G("btnReplayTut").onclick=()=>{ if(currentStep==="control") startTutorial(); };
 // ============================================================
 //  ARM SELECTION
 // ============================================================
-const ARM_KEY="motor.arm";
-function currentArm(){ try{ return localStorage.getItem(ARM_KEY); }catch(_){ return null; } }
+// The arm-type chooser was removed: the dashboard always runs in OpenArm
+// (automatic calibration) mode. The Aloha code paths below are kept intact and
+// still key off currentArm()==="aloha", they're just never selected anymore.
+function currentArm(){ return "openarm"; }
 function applyArmUI(){
-  const a=currentArm();
-  G("armIcon").innerHTML = a==="aloha" ? "&#129302;" : "&#129482;";
-  G("armName").textContent = a==="aloha" ? "Aloha" : (a==="openarm" ? "OpenArm" : "choose arm");
   const sub=G("calSub");
-  if(sub) sub.innerHTML = (a==="aloha")
-    ? "For each motor, press <b>Calibrate</b>, drive it to both hardstops with the slider and mark them. The joint then centers itself and sets zero. Keep clear and be ready to <b>E-STOP</b>."
-    : "Calibration finds each joint's range of motion and sets its zero point. It's required once before you can control the motors. Keep the area clear &mdash; the joints will move on their own. You can hit <b>E-STOP</b> at any time.";
+  if(sub) sub.innerHTML = "Calibration finds each joint's range of motion and sets its zero point. It's required once before you can control the motors. Keep the area clear &mdash; the joints will move on their own. You can hit <b>E-STOP</b> at any time.";
 }
-function showArmSelect(){ G("armSelect").classList.remove("hide"); G("wizard").classList.add("hide"); }
-function showWizard(){ G("armSelect").classList.add("hide"); G("wizard").classList.remove("hide"); goStep(currentStep||"connect"); }
-function setArm(a){ try{ localStorage.setItem(ARM_KEY,a); }catch(_){} applyArmUI(); }
-document.querySelectorAll(".arm-opt").forEach(b=>b.onclick=()=>{ setArm(b.dataset.arm); showWizard(); });
-G("armPill").onclick=()=>{ closeManual(); showArmSelect(); };
+function showWizard(){ G("wizard").classList.remove("hide"); goStep(currentStep||"connect"); }
 
 // ============================================================
 //  ALOHA MANUAL CALIBRATION PANEL
@@ -1725,8 +1687,7 @@ window.addEventListener("resize",()=>Object.values(cards).forEach(c=>c.node.quer
 updateStepper();
 
 // ---- arm init: show selection first time, otherwise go straight to the wizard ----
-if(currentArm()){ applyArmUI(); showWizard(); }
-else { applyArmUI(); showArmSelect(); }
+applyArmUI(); showWizard();
 </script>
 </body>
 </html>

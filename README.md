@@ -14,7 +14,7 @@ the terminal, re-calibrating, recovering from faults, and so on).
   (clean machine)](#3-first-time-setup-clean-machine)**. You only do it once.
 - **Machine already set up?** Open a terminal in this folder and run `./run.sh`,
   then open <http://127.0.0.1:5000> and follow the on-screen wizard:
-  **Choose arm → Scan → Connect All → Calibrate → Controls**.
+  **Scan → Connect All → Calibrate → Controls**.
 
 ## Contents
 
@@ -220,19 +220,10 @@ To stop the dashboard, return to the terminal and press **Ctrl-C**.
 
 ## 6. Using the dashboard — step by step
 
-The dashboard guides you through a wizard: **Choose arm → Connect → Calibrate →
-Controls**. There's also a built-in tutorial (look for **ⓘ Show tutorial**).
+The dashboard guides you through a wizard: **Connect → Calibrate → Controls**.
+There's also a built-in tutorial (look for **ⓘ Show tutorial**).
 
-### Step 6.1 — Choose your arm
-
-Pick **OpenArm** or **Aloha** at the top. This tailors the calibration flow:
-
-- **OpenArm** — joints **auto-calibrate** (the software finds the hardstops for
-  you).
-- **Aloha** — joints are calibrated **by hand** (you move each joint to its
-  stops and mark them).
-
-### Step 6.2 — Connect
+### Step 6.1 — Connect
 
 1. Click **Scan for Motors**. This probes IDs 1–8 on the bus (both channels on a
    dual adapter) and lists every joint that answers.
@@ -244,13 +235,13 @@ Pick **OpenArm** or **Aloha** at the top. This tailors the calibration flow:
 
 When at least one motor is connected, click **Continue to Calibration →**.
 
-### Step 6.3 — Calibrate
+### Step 6.2 — Calibrate
 
 Calibration finds each joint's **range of motion** and sets its **zero point**.
 After calibration, the UI sliders and the backend both refuse to drive a joint
 past its real hardstops — this is an important safety feature.
 
-**OpenArm (automatic):**
+**Automatic calibration:**
 
 - Click **Calibrate All Motors**. Each joint, one at a time, slowly creeps to
   one hardstop, then the other. The two stops become the joint's position
@@ -264,17 +255,8 @@ past its real hardstops — this is an important safety feature.
     are then left **limp** at home rather than being driven to a center.
 - Some joints (notably **J4**) need extra "breakaway" effort and are handled with
   a special profile automatically.
-- If a loaded joint can't be auto-calibrated, switch that joint to **Manual
-  Calibration** (see below).
-
-**Aloha (manual), or any joint that won't auto-calibrate:**
-
-1. On the joint, open **Manual calibration**.
-2. **Disable** the joint (so it moves freely by hand) or use **Enable to move**
-   for guided jogging.
-3. Move it to the **rear** hardstop → click **Mark Rear Stop**.
-4. Move it to the **front** hardstop → click **Mark Front Stop**.
-5. Move it to the displayed **midpoint** → click **Confirm & Zero**.
+- If a loaded joint can't be auto-calibrated, see
+  [Troubleshooting 8.5](#85-calibration-fails-no-hardstop-detected-span-too-small-etc).
 
 Calibration is **saved to disk** (`calibrations.json`) and reloaded
 automatically next time you connect that joint — you don't have to re-calibrate
@@ -284,7 +266,7 @@ every session unless something changes.
 > joint will then allow its full electrical range with no soft limits. Only do
 > this if you know what you're doing.
 
-### Step 6.4 — Controls
+### Step 6.3 — Controls
 
 At the top of the Controls step is a **Controls** action bar with whole-arm
 buttons:
@@ -435,13 +417,10 @@ The status will read something like *overcurrent*, *over-temperature*
 1. **Make sure the joint can actually reach both stops** — nothing blocking it,
    cables not snagging.
 2. **Heavy / loaded joints:** auto-calibration uses a limited torque budget on
-   purpose. If the joint stalls under its own weight before reaching a stop, use
-   **Manual Calibration** for that joint instead (move by hand, mark both stops,
-   confirm at the midpoint).
-3. **"Move joint to midpoint before saving"** during manual calibration just
-   means the joint isn't close enough to the computed center yet — nudge it to
-   the displayed midpoint value and click **Confirm & Zero** again.
-4. **E-STOP aborts calibration.** If you (or a fault) hit E-STOP mid-calibration,
+   purpose. If the joint stalls under its own weight before reaching a stop,
+   support or unload it, clear any obstruction, and run **Calibrate** for that
+   joint again.
+3. **E-STOP aborts calibration.** If you (or a fault) hit E-STOP mid-calibration,
    it stops cleanly. Re-enable and start the calibration over.
 
 ### 8.6 I need to re-calibrate a joint from scratch
