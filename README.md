@@ -127,8 +127,8 @@ two things: the **USB-to-CAN adapter** (data) and the **power board** (24 V).
 Clone the repository (or copy this folder onto the machine), then `cd` into it:
 
 ```bash
-git clone https://github.com/RoboticsCenter/aloha-openarm.git
-cd aloha-openarm
+git clone https://github.com/RoboticsCenter/openarm.git
+cd openarm
 ```
 
 If you already have the folder, just `cd` into wherever it lives on your machine.
