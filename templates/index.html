@@ -1008,18 +1008,37 @@ async function runAutoCalibrate(channel, motorId){
   if(r.ok) await post("/api/target",{channel, motor_id:motorId, kp:defaultGains.kp, kd:defaultGains.kd});
   return r;
 }
-// Calibrate each joint across every arm that has it (one joint at a time).
+// Calibrate this joint on EVERY arm at the same time: a single request whose
+// backend sweeps each arm's matching joint concurrently on its own bus.
+async function runAutoCalibrateJoint(j){
+  const r=await post("/api/auto_calibrate",{motor_id:j, all_arms:true});
+  if(r.ok){
+    // Restore a holding setpoint on each arm's motor for this joint.
+    for(const u of uidsForJoint(j)){
+      const {channel,motor_id}=splitUid(u);
+      await post("/api/target",{channel, motor_id, kp:defaultGains.kp, kd:defaultGains.kd});
+    }
+  }
+  return r;
+}
+// Calibrate each joint on every arm simultaneously (one joint at a time).
 async function calibrateJoints(joints, returnHome){
   if(!joints.length || calibrating) return;
   calibrating=true; updateCalStep();
   const cmd=document.getElementById("calCmd");
   for(const j of joints){
-    for(const u of uidsForJoint(j)){
-      const {channel,motor_id}=splitUid(u);
-      flash(cmd, twoArms()?`Calibrating joint ${j} (${armLabel(channel)})…`:`Calibrating ${motorName(u)}…`);
-      const r=await runAutoCalibrate(channel, motor_id);
-      if(!r.ok){ calibrating=false; updateCalStep();
-        flash(cmd,`Calibration failed for joint ${j} (${armLabel(channel)}): ${r.error||"unknown error"}`,true); return; }
+    flash(cmd, twoArms()?`Calibrating joint ${j} on both arms…`:`Calibrating joint ${j}…`);
+    const r=await runAutoCalibrateJoint(j);
+    const failed=!r.ok || r.verified===false;
+    if(failed){
+      let detail=r.error||"";
+      if(Array.isArray(r.results)){
+        const bad=r.results.filter(x=>!x.ok)
+          .map(x=>`${armLabel(x.channel)}: ${x.error||"failed"}`).join("; ");
+        if(bad) detail=bad;
+      }
+      calibrating=false; updateCalStep();
+      flash(cmd,`Calibration failed for joint ${j}: ${detail||"unknown error"}`,true); return;
     }
   }
   if(returnHome){ flash(cmd,"Calibration done. Returning to home position…");

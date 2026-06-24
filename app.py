@@ -270,6 +270,12 @@ def api_auto_calibrate():
         if body.get("all"):
             results = service.auto_calibrate_all(speed=speed, max_s=max_s)
             return _ok(results=results)
+        if body.get("all_arms"):
+            # Calibrate this joint on every arm at the same time.
+            results = service.auto_calibrate_joint(
+                _mid(body), speed=speed, max_s=max_s)
+            ok = all(r.get("ok") for r in results) if results else False
+            return _ok(results=results, verified=ok)
         res = service.auto_calibrate(
             _chan(body), _mid(body), speed=speed, max_s=max_s) or {}
     except Exception as e:

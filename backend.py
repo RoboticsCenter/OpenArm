@@ -394,12 +394,15 @@ class MotorService:
             return {}
 
     def _write_calibration_store(self):
-        CALIBRATION_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CALIBRATION_STORE_PATH.with_suffix(CALIBRATION_STORE_PATH.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(self._calibration_store, f, indent=2, sort_keys=True)
-            f.write("\n")
-        tmp.replace(CALIBRATION_STORE_PATH)
+        # Hold the lock so concurrent dual-arm calibration threads can't write
+        # the same tmp file at once or json.dump a dict another thread mutates.
+        with self.lock:
+            CALIBRATION_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = CALIBRATION_STORE_PATH.with_suffix(CALIBRATION_STORE_PATH.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(self._calibration_store, f, indent=2, sort_keys=True)
+                f.write("\n")
+            tmp.replace(CALIBRATION_STORE_PATH)
 
     def _load_arm_sides(self) -> dict:
         try:
@@ -526,8 +529,9 @@ class MotorService:
             "saved_at": time.time(),
             "result": result,
         }
-        self._calibration_store[self._cal_key(mh.channel, mh.motor_id)] = record
-        self._write_calibration_store()
+        with self.lock:
+            self._calibration_store[self._cal_key(mh.channel, mh.motor_id)] = record
+            self._write_calibration_store()
 
     def _forget_calibration(self, mh: _MotorHandle):
         changed = self._calibration_store.pop(
@@ -2084,6 +2088,55 @@ class MotorService:
                 })
             return results
         timeout = (float(max_s) * 2.0 + 90.0) * max(1, len(self.motors))
+        return self._submit(run, timeout=timeout)
+
+    def auto_calibrate_joint(self, motor_id, channels=None,
+                             speed=CAL_SPEED_RAD_S, max_s=CAL_MAX_SWEEP_S):
+        """Calibrate the same joint on every arm at the same time.
+
+        On SocketCAN each arm is an independent bus, so we run one thread per
+        channel and sweep the matching joint on both arms simultaneously. Other
+        transports (DM dual = one shared bus) fall back to sequential calibration.
+        Returns a list of per-arm result dicts; a failure on one arm is captured
+        in its result and does not abort the others.
+        """
+        mid = int(motor_id)
+        want = [str(c) for c in channels] if channels else self._channels_present()
+        targets = [ch for ch in want if self._key(ch, mid) in self.motors]
+        if not targets:
+            raise RuntimeError(f"joint {mid} is not connected on any arm")
+
+        def run():
+            # Pre-open every target channel up front (single-threaded) so the
+            # per-channel worker threads never race on _build_channel/_activate.
+            for ch in targets:
+                self._activate(ch)
+
+            out: "Dict[str, dict]" = {}
+
+            def cal_one(ch):
+                try:
+                    out[ch] = {"channel": ch, "motor_id": mid,
+                               **self._do_auto_calibrate_one(ch, mid, speed, max_s)}
+                except Exception as e:  # noqa: BLE001
+                    out[ch] = {"channel": ch, "motor_id": mid,
+                               "ok": False, "error": str(e)}
+
+            if self._use_socketcan and len(targets) > 1:
+                threads = [threading.Thread(target=cal_one, args=(ch,),
+                                            name=f"cal-{ch}-{mid}", daemon=True)
+                           for ch in targets]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+            else:
+                for ch in targets:
+                    cal_one(ch)
+
+            return [out[ch] for ch in targets if ch in out]
+
+        timeout = float(max_s) * 2.0 + 90.0
         return self._submit(run, timeout=timeout)
 
     def activate(self, channel):
