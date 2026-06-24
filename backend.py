@@ -161,6 +161,12 @@ ARM_SIDES_STORE_PATH = Path(os.environ.get(
     "DM_ARM_SIDES_STORE",
     str(Path(__file__).with_name("arm_sides.json"))))
 ARM_SIDES = ("left", "right")
+RECORDINGS_STORE_PATH = Path(os.environ.get(
+    "DM_RECORDINGS_STORE",
+    str(Path(__file__).with_name("recordings.json"))))
+# Seconds spent easing the arm from its current pose to a clip's first frame
+# before playback begins, so it never snaps to the start position.
+PLAYBACK_APPROACH_S = _env_float("DM_PLAYBACK_APPROACH_S", 1.5)
 
 
 def _clamp(x, lo, hi):
@@ -277,6 +283,19 @@ class MotorService:
         self.default_model = model
         self.rate_hz = rate_hz
 
+        # Transport selection. The DaMiao DM-USB2FDCAN ("dm_device") path uses
+        # DaMiao's proprietary libusb SDK, which only ever matches the DaMiao
+        # adapter in USB mode (vendor 34b7). When that same adapter is flashed
+        # with candleLight/gs_usb firmware it enumerates as 1d50:606f and the
+        # Linux kernel exposes it as SocketCAN interfaces ("can0", "can1", ...);
+        # those are opened with motorbridge's SocketCAN-FD transport instead.
+        # SocketCAN is selected when the device type is "socketcanfd"/"socketcan"
+        # or the channel names a canX interface (DM_CHANNEL=can0, or
+        # DM_CHANNEL=can0,can1 to scan both).
+        self._use_socketcan = (
+            str(device_type).lower() in ("socketcanfd", "socketcan")
+            or str(channel).lower().startswith("can"))
+
         # Lock protects only the plain shared state below (NOT the SDK handle).
         self.lock = threading.RLock()
         self.fault: Optional[str] = None
@@ -288,13 +307,32 @@ class MotorService:
         # of a left arm, so reverse-only joints must sweep the opposite way.
         self._arm_sides = self._load_arm_sides()
 
-        # The DM-USB2FDCAN dual adapter only services ONE CAN channel at a time:
-        # opening a second controller while the first is open makes both talk to
-        # the same physical bus. So exactly one channel is "active" (open) at a
-        # time; switching arms tears the current bus down and opens the other.
-        # Motors on the inactive channel keep their config/calibration but have
-        # no live SDK handle until their channel is activated again.
-        self._ctrl: Optional[Controller] = None
+        # Movement recording / playback. Named clips of commanded joint
+        # positions sampled at the control rate; both the recorder and player
+        # are driven from the worker's _tick so they share state with the
+        # control loop without extra locking.
+        self._recordings_store = self._load_recordings()
+        self._recorder: Optional[dict] = None  # active capture, or None
+        self._player: Optional[dict] = None     # active playback, or None
+
+        # Controller model depends on the transport:
+        #   - SocketCAN (gs_usb): each canX interface is independent, so we keep
+        #     ONE controller open per channel simultaneously. Every motor has a
+        #     live SDK handle and is commanded every tick, so both arms stay
+        #     energized/holding at once and "switching arms" is only a focus
+        #     change in the UI -- it never tears the other bus down.
+        #   - DM-USB2FDCAN dual adapter: the hardware only services ONE CAN
+        #     channel at a time (opening a second controller makes both talk to
+        #     the same physical bus), so exactly one channel is open at a time
+        #     and switching arms tears the current bus down and opens the other.
+        # ``self._ctrls`` maps channel -> open Controller; ``self._active_channel``
+        # is the focused arm (the only open one on the DM path).
+        self._ctrls: "Dict[str, Controller]" = {}
+        # Per-channel "built" signature -- sorted (id, feedback_id, model) of the
+        # motor handles currently live on that channel. Used so a rebuild only
+        # touches channels whose roster/model actually changed, leaving the other
+        # arm energized and holding.
+        self._built: "Dict[str, tuple]" = {}
         self._active_channel: Optional[str] = None
 
         self._q: "queue.Queue[_Cmd]" = queue.Queue()
@@ -323,9 +361,12 @@ class MotorService:
         return f"{channel}:{motor_id}"
 
     def _ctrl_for(self, mh: "_MotorHandle") -> Optional[Controller]:
-        if self._ctrl is not None and str(mh.channel) == str(self._active_channel):
-            return self._ctrl
-        return None
+        """The open controller for a motor's channel, or None if not open.
+
+        On SocketCAN every channel can be open at once; on the DM dual adapter
+        only the active channel is open, so inactive-channel motors return None.
+        """
+        return self._ctrls.get(str(mh.channel))
 
     def _channels_present(self) -> List[str]:
         seen: List[str] = []
@@ -379,6 +420,25 @@ class MotorService:
             json.dump(self._arm_sides, f, indent=2, sort_keys=True)
             f.write("\n")
         tmp.replace(ARM_SIDES_STORE_PATH)
+
+    def _load_recordings(self) -> dict:
+        try:
+            with RECORDINGS_STORE_PATH.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            return {}
+        except Exception as e:  # noqa: BLE001
+            self.fault = f"could not read recordings store: {e}"
+            return {}
+
+    def _write_recordings(self):
+        RECORDINGS_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = RECORDINGS_STORE_PATH.with_suffix(RECORDINGS_STORE_PATH.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(self._recordings_store, f, indent=2, sort_keys=True)
+            f.write("\n")
+        tmp.replace(RECORDINGS_STORE_PATH)
 
     def get_arm_side(self, channel) -> str:
         """Handedness of an arm; defaults to 'left' (the original sweep dir)."""
@@ -530,9 +590,20 @@ class MotorService:
         self._teardown()
 
     def _tick(self):
-        if self._ctrl is None or not self.motors:
+        if not self._ctrls or not self.motors:
             return
-        # Only motors on the currently-active channel have a live SDK handle.
+        # Replay writes the next setpoints into mh.sp BEFORE the plan snapshot
+        # below, so this same tick streams them to hardware.
+        if self._player is not None:
+            try:
+                self._advance_playback()
+            except Exception as e:  # noqa: BLE001
+                with self.lock:
+                    self._player = None
+                    self.fault = f"playback error: {e}"
+        # On SocketCAN every connected motor (all channels) has a live SDK
+        # handle and is commanded here; on the DM dual adapter only the active
+        # channel's motors do.
         with self.lock:
             plan = [(mh, mh.enabled, mh.estopped, mh.mode, dict(mh.sp), mh._mode_applied)
                     for mh in self.motors.values() if mh._motor is not None]
@@ -576,13 +647,14 @@ class MotorService:
                 with self.lock:
                     mh.fault = f"command error: {e}"
 
-        # Drain feedback frames on the active channel, then read each motor.
+        # Drain feedback frames on every open bus, then read each motor.
         active = [mh for mh in self.motors.values() if mh._motor is not None]
         for _ in range(len(active) + 2):
-            try:
-                self._ctrl.poll_feedback_once()
-            except Exception:
-                break
+            for ctrl in list(self._ctrls.values()):
+                try:
+                    ctrl.poll_feedback_once()
+                except Exception:
+                    pass
         for mh in list(self.motors.values()):
             if mh._motor is None:
                 continue
@@ -605,6 +677,164 @@ class MotorService:
                         "ts": time.time(),
                     }
                 self._supervise(mh, sc)
+
+        # Capture the commanded trajectory last, so this frame reflects the
+        # setpoints that were actually streamed this tick.
+        if self._recorder is not None:
+            try:
+                self._capture_frame()
+            except Exception:  # noqa: BLE001 - never let capture break control
+                pass
+
+    # ------------------------------------------------------------------ #
+    # Movement recording / playback (run on the worker thread via _tick)
+    # ------------------------------------------------------------------ #
+    def _capture_frame(self):
+        rec = self._recorder
+        if rec is None:
+            return
+        t = round(time.time() - rec["start"], 4)
+        snap: Dict[str, float] = {}
+        with self.lock:
+            ch = rec["channel"]
+            for mh in self.motors.values():
+                if mh._motor is None or str(mh.channel) != ch:
+                    continue
+                if not mh.enabled or mh.estopped:
+                    continue
+                mid = str(mh.motor_id)
+                snap[mid] = round(float(mh.sp["pos"]), 5)
+                g = rec["gains"].setdefault(mid, {})
+                g["kp"] = round(float(mh.sp["kp"]), 4)
+                g["kd"] = round(float(mh.sp["kd"]), 4)
+        if snap:
+            rec["frames"].append([t, snap])
+
+    @staticmethod
+    def _interp_frame(frames, t):
+        """Linear-interpolate the recorded position map at time ``t``."""
+        if not frames:
+            return None
+        if t <= frames[0][0]:
+            return frames[0][1]
+        prev = frames[0]
+        for fr in frames[1:]:
+            if fr[0] >= t:
+                t0, m0 = prev
+                t1, m1 = fr
+                if t1 <= t0:
+                    return m1
+                a = (t - t0) / (t1 - t0)
+                out = {}
+                for mid, p1 in m1.items():
+                    p0 = m0.get(mid, p1)
+                    out[mid] = p0 + (p1 - p0) * a
+                return out
+            prev = fr
+        return frames[-1][1]
+
+    def _write_play_setpoint(self, mh: _MotorHandle, pos: float, clip: dict):
+        """Drive one motor toward ``pos`` in MIT mode using the clip's recorded
+        gains (falling back to safe holding gains). Caller holds self.lock."""
+        pmax = mh.limits[0]
+        pos_min = -pmax if mh.pos_min is None else mh.pos_min
+        pos_max = pmax if mh.pos_max is None else mh.pos_max
+        g = (clip.get("gains") or {}).get(str(mh.motor_id)) or {}
+        kp = g.get("kp")
+        kd = g.get("kd")
+        mh.mode = "mit"
+        mh.sp["pos"] = _clamp(float(pos), pos_min, pos_max)
+        mh.sp["vel"] = 0.0
+        mh.sp["tau"] = 0.0
+        if kp is not None and float(kp) > 0.0:
+            mh.sp["kp"] = _clamp(float(kp), 0.0, 500.0)
+        elif float(mh.sp["kp"]) <= 0.0:
+            mh.sp["kp"] = CAL_MIT_KP
+        if kd is not None and float(kd) > 0.0:
+            mh.sp["kd"] = _clamp(float(kd), 0.0, 5.0)
+        elif float(mh.sp["kd"]) <= 0.0:
+            mh.sp["kd"] = CAL_MIT_KD
+
+    def _begin_clip_approach(self, now: float):
+        """Set up a short interpolated move from each involved motor's current
+        position to the upcoming clip's first frame, so playback never snaps."""
+        pl = self._player
+        clip = pl["queue"][pl["idx"]]
+        first = clip["frames"][0][1]
+        approach = {}
+        with self.lock:
+            for mid, target in first.items():
+                mh = self.motors.get(self._key(pl["channel"], int(mid)))
+                if mh is None:
+                    continue
+                cur = mh.state.get("pos")
+                if cur is None:
+                    cur = mh.sp["pos"]
+                approach[mid] = (float(cur), float(target))
+        pl["approach"] = approach
+        pl["phase"] = "approach"
+        pl["start"] = now
+        pl["current"] = clip.get("name", "")
+
+    def _advance_playback(self):
+        pl = self._player
+        if pl is None:
+            return
+        now = time.time()
+        clip = pl["queue"][pl["idx"]]
+
+        if pl["phase"] == "approach":
+            dur = max(0.0, PLAYBACK_APPROACH_S)
+            frac = 1.0 if dur <= 0 else min(1.0, (now - pl["start"]) / dur)
+            with self.lock:
+                for mid, (p0, p1) in pl["approach"].items():
+                    mh = self.motors.get(self._key(pl["channel"], int(mid)))
+                    if mh is None:
+                        continue
+                    self._write_play_setpoint(mh, p0 + (p1 - p0) * frac, clip)
+            if frac >= 1.0:
+                pl["phase"] = "play"
+                pl["start"] = now
+                pl["elapsed"] = 0.0
+            return
+
+        # Play phase: stream the recorded trajectory in real time.
+        frames = clip["frames"]
+        duration = float(clip.get("duration") or (frames[-1][0] if frames else 0.0))
+        t = now - pl["start"]
+        pl["elapsed"] = round(t, 3)
+        if t >= duration:
+            pos_map = frames[-1][1]
+            with self.lock:
+                for mid, p in pos_map.items():
+                    mh = self.motors.get(self._key(pl["channel"], int(mid)))
+                    if mh is None:
+                        continue
+                    self._write_play_setpoint(mh, p, clip)
+            self._next_clip(now)
+            return
+        pos_map = self._interp_frame(frames, t)
+        if pos_map is None:
+            self._next_clip(now)
+            return
+        with self.lock:
+            for mid, p in pos_map.items():
+                mh = self.motors.get(self._key(pl["channel"], int(mid)))
+                if mh is None:
+                    continue
+                self._write_play_setpoint(mh, p, clip)
+
+    def _next_clip(self, now: float):
+        pl = self._player
+        pl["idx"] += 1
+        if pl["idx"] >= len(pl["queue"]):
+            if pl["loop"]:
+                pl["idx"] = 0
+            else:
+                with self.lock:
+                    self._player = None
+                return
+        self._begin_clip_approach(now)
 
     def _supervise(self, mh: _MotorHandle, sc: int):
         """Watch a commanded motor's reported status and react:
@@ -648,10 +878,34 @@ class MotorService:
     # ------------------------------------------------------------------ #
     # Device operations (executed on the worker thread)
     # ------------------------------------------------------------------ #
-    def _teardown(self):
-        # Closing the bus drops every live motor: cut their torque and mark them
-        # disabled so reactivating a channel never silently re-energizes a joint.
+    def _open_controller(self, channel) -> Controller:
+        """Open the shared bus for ``channel`` using the configured transport.
+
+        SocketCAN interfaces (gs_usb / candleLight) go through
+        ``from_socketcanfd``; the DaMiao DM-USB2FDCAN adapter in USB mode goes
+        through the proprietary ``from_dm_device`` SDK path.
+        """
+        ch = str(channel)
+        if self._use_socketcan:
+            return Controller.from_socketcanfd(ch)
+        return Controller.from_dm_device(self.device_type, ch)
+
+    def _scan_channels(self) -> List[str]:
+        """CAN channels to probe during a scan, per transport."""
+        if self._use_socketcan:
+            return [c.strip() for c in self.channel.split(",") if c.strip()]
+        return ["0", "1"] if "dual" in self.device_type else [self.channel]
+
+    def _close_channel(self, channel):
+        """Disable + close every motor on one channel and close its controller.
+
+        Cuts torque and marks the motors disabled so a channel is never silently
+        re-energized when it is reopened.
+        """
+        ch = str(channel)
         for mh in self.motors.values():
+            if str(mh.channel) != ch:
+                continue
             if mh._motor is not None:
                 try:
                     mh._motor.disable()
@@ -666,53 +920,113 @@ class MotorService:
                 mh.enabled = False
                 mh.max_power = False
                 mh._mode_applied = None
-        if self._ctrl is not None:
+        ctrl = self._ctrls.pop(ch, None)
+        if ctrl is not None:
             try:
-                self._ctrl.close_bus()
+                ctrl.close_bus()
             except Exception:
                 pass
             try:
-                self._ctrl.close()
+                ctrl.close()
             except Exception:
                 pass
-            self._ctrl = None
+        self._built.pop(ch, None)
 
-    def _rebuild(self):
-        """(Re)open the shared controller and re-add every known motor.
-
-        The motorbridge model is fixed at add-time and re-adding a live id on a
-        running controller fails, so any roster/model change goes through a full
-        clean rebuild of the bus. Only the active channel is opened (the adapter
-        cannot drive both channels at once); motors on other channels stay
-        registered but without a live SDK handle until their channel is made
-        active.
-        """
-        self._teardown()
-        if not self.motors:
-            self._active_channel = None
-            return
-        present = self._channels_present()
-        if self._active_channel is None or str(self._active_channel) not in present:
-            self._active_channel = present[0]
-        ch = str(self._active_channel)
-        self._ctrl = Controller.from_dm_device(self.device_type, ch)
+    def _build_channel(self, channel):
+        """Open one channel's controller and add a live handle for every motor
+        registered on it."""
+        ch = str(channel)
+        ctrl = self._open_controller(ch)
+        self._ctrls[ch] = ctrl
+        sig = []
         for mh in self.motors.values():
             if str(mh.channel) != ch:
-                mh._motor = None
                 continue
-            mh._motor = self._ctrl.add_damiao_motor(
+            mh._motor = ctrl.add_damiao_motor(
                 mh.motor_id, mh.feedback_id, mh.model)
             mh._mode_applied = None
             # The physical mode register state is unknown after a rebuild, so
             # force the next MIT enable to re-assert it.
             mh._mode_register = None
+            sig.append((mh.motor_id, mh.feedback_id, mh.model))
+        self._built[ch] = tuple(sorted(sig))
+
+    def _teardown(self):
+        # Close every open channel (and reset any motor still flagged live).
+        for ch in set(self._ctrls.keys()) | {str(mh.channel) for mh in self.motors.values()}:
+            self._close_channel(ch)
+        self._ctrls.clear()
+        self._built.clear()
+
+    def _rebuild(self):
+        """Reconcile open controllers + live motor handles with ``self.motors``.
+
+        On the DM-USB2FDCAN dual adapter only ONE channel can be open at a time
+        (a hardware limit), so this tears everything down and opens just the
+        active channel. On SocketCAN every channel is independent, so we keep one
+        controller open per present channel and only (re)build the channels whose
+        motor roster/model actually changed -- leaving the other arm energized
+        and holding. (The motorbridge model is fixed at add-time and re-adding a
+        live id fails, so a changed channel is closed and reopened.)
+        """
+        if not self.motors:
+            self._teardown()
+            self._active_channel = None
+            return
+        present = self._channels_present()
+        if self._active_channel is None or str(self._active_channel) not in present:
+            self._active_channel = present[0]
+
+        if not self._use_socketcan:
+            # One bus at a time: only the active channel is open.
+            self._teardown()
+            self._build_channel(str(self._active_channel))
+            for mh in self.motors.values():
+                if str(mh.channel) != str(self._active_channel):
+                    mh._motor = None
+            return
+
+        # SocketCAN: keep all present channels open simultaneously.
+        desired = {
+            ch: tuple(sorted(
+                (mh.motor_id, mh.feedback_id, mh.model)
+                for mh in self.motors.values() if str(mh.channel) == ch))
+            for ch in present
+        }
+        # Close channels that no longer have any motors.
+        for ch in list(self._ctrls.keys()):
+            if ch not in present:
+                self._close_channel(ch)
+        # (Re)build only new or changed channels; untouched arms keep holding.
+        for ch in present:
+            if ch in self._ctrls and self._built.get(ch) == desired[ch]:
+                continue
+            if ch in self._ctrls:
+                self._close_channel(ch)
+            self._build_channel(ch)
 
     def _activate(self, channel):
-        """Make ``channel`` the live bus (no-op if already active)."""
+        """Focus a channel/arm.
+
+        On SocketCAN this is only a focus change -- every present channel is
+        already open, so the other arm keeps holding; we just open this channel
+        if it somehow is not yet. On the DM dual adapter, focusing a different
+        channel must tear down the current bus and open the new one (and so
+        invalidates any capture/playback running on the old arm).
+        """
         ch = str(channel)
-        if ch == str(self._active_channel) and self._ctrl is not None:
-            return
         self._active_channel = ch
+        if self._use_socketcan:
+            if ch not in self._ctrls and ch in self._channels_present():
+                self._build_channel(ch)
+            return
+        with self.lock:
+            if self._recorder is not None and self._recorder["channel"] != ch:
+                self._recorder = None
+            if self._player is not None and self._player["channel"] != ch:
+                self._player = None
+        if ch in self._ctrls:
+            return
         self._rebuild()
 
     def _autodetect(self, mh: _MotorHandle) -> bool:
@@ -812,7 +1126,7 @@ class MotorService:
         # Scanning needs exclusive use of the bus, so drop the live controller
         # first, then restore the roster afterwards.
         self._teardown()
-        channels = ["0", "1"] if "dual" in self.device_type else [self.channel]
+        channels = self._scan_channels()
         # Wide sweeps need a small per-id budget to stay responsive; present
         # motors answer on the first poll or two, so this rarely misses.
         span = max(1, end_id - start_id + 1)
@@ -823,7 +1137,7 @@ class MotorService:
         last_open_err: Optional[str] = None
         for ch in channels:
             try:
-                ctrl = Controller.from_dm_device(self.device_type, ch)
+                ctrl = self._open_controller(ch)
             except Exception as e:  # noqa: BLE001
                 last_open_err = str(e)
                 continue
@@ -850,6 +1164,14 @@ class MotorService:
                 pass
 
         if opened == 0:
+            if self._use_socketcan:
+                iface = channels[0] if channels else "can0"
+                raise RuntimeError(
+                    f"could not open SocketCAN bus '{iface}' -- check the "
+                    "adapter is plugged in and the interface is UP (sudo ip "
+                    f"link set {iface} type can bitrate 1000000 dbitrate "
+                    f"5000000 fd on; sudo ip link set {iface} up)" +
+                    (f" ({last_open_err})" if last_open_err else ""))
             raise RuntimeError(
                 "CAN adapter not detected -- check the USB-CAN adapter is "
                 "plugged in and powered" +
@@ -910,6 +1232,12 @@ class MotorService:
         with self.lock:
             mh.enabled = False
             mh.max_power = False
+            # Disabling a motor that is part of an active playback aborts it,
+            # so "Disable All" reliably stops a running sequence.
+            pl = self._player
+            if (pl is not None and pl["channel"] == str(mh.channel)
+                    and mh.motor_id in pl["motors"]):
+                self._player = None
         if mh._motor is not None:
             mh._motor.disable()
 
@@ -1050,10 +1378,16 @@ class MotorService:
         # Take exclusive use of the bus: only the selected joint should move.
         with self.lock:
             for other in self.motors.values():
+                # On SocketCAN the other arm is on an independent bus, so leave
+                # it energized/holding; only quiet motors sharing this bus.
+                if self._use_socketcan and str(other.channel) != str(mh.channel):
+                    continue
                 other.enabled = False
                 other.max_power = False
                 other.sp.update(vel=0.0, tau=0.0)
         for other in self.motors.values():
+            if self._use_socketcan and str(other.channel) != str(mh.channel):
+                continue
             if other._motor is not None:
                 try:
                     other._motor.disable()
@@ -1449,10 +1783,16 @@ class MotorService:
         # so only the selected joint can move.
         with self.lock:
             for other in self.motors.values():
+                # On SocketCAN the other arm is on an independent bus, so leave
+                # it energized/holding; only quiet motors sharing this bus.
+                if self._use_socketcan and str(other.channel) != str(mh.channel):
+                    continue
                 other.enabled = False
                 other.max_power = False
                 other.sp.update(vel=0.0, tau=0.0)
         for other in self.motors.values():
+            if self._use_socketcan and str(other.channel) != str(mh.channel):
+                continue
             if other._motor is not None:
                 try:
                     other._motor.disable()
@@ -1776,6 +2116,10 @@ class MotorService:
             else:
                 targets = list(self.motors.values())
             keys = [self._key(mh.channel, mh.motor_id) for mh in targets]
+            # An e-stop must abort any capture or playback so the arm never
+            # keeps replaying after a safety stop.
+            self._recorder = None
+            self._player = None
             for mh in targets:
                 mh.enabled = False
                 mh.max_power = False
@@ -1870,6 +2214,206 @@ class MotorService:
             if "ratio" in kw:
                 mh.sp["ratio"] = _clamp(float(kw["ratio"]), 0.0, 1.0)
 
+    # ------------------------------------------------------------------ #
+    # Movement recording / playback (public API; called from HTTP threads)
+    # ------------------------------------------------------------------ #
+    def start_recording(self):
+        with self.lock:
+            if self._player is not None:
+                raise RuntimeError("cannot record during playback")
+            ch = self._active_channel
+            if ch is None:
+                raise RuntimeError("no active arm; connect a motor first")
+            enabled = [mh.motor_id for mh in self.motors.values()
+                       if mh._motor is not None and str(mh.channel) == str(ch)
+                       and mh.enabled and not mh.estopped]
+            if not enabled:
+                raise RuntimeError(
+                    "enable at least one motor before recording")
+            self._recorder = {
+                "active": True,
+                "channel": str(ch),
+                "start": time.time(),
+                "frames": [],
+                "gains": {},
+            }
+        return {"channel": str(ch), "motors": sorted(enabled)}
+
+    def stop_recording(self, name):
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("a recording name is required")
+        with self.lock:
+            rec = self._recorder
+            self._recorder = None
+            if rec is None:
+                raise RuntimeError("not recording")
+            frames = rec["frames"]
+            if not frames:
+                raise RuntimeError("nothing was captured")
+            duration = round(frames[-1][0], 3)
+            motors = sorted({int(m) for _, snap in frames for m in snap})
+            clip = {
+                "name": name,
+                "channel": rec["channel"],
+                "rate_hz": self.rate_hz,
+                "created_at": time.time(),
+                "duration": duration,
+                "motors": motors,
+                "gains": rec["gains"],
+                "frames": frames,
+            }
+            self._recordings_store[name] = clip
+            self._write_recordings()
+        return {"name": name, "duration": duration, "motors": motors}
+
+    def discard_recording(self):
+        with self.lock:
+            was = self._recorder is not None
+            self._recorder = None
+        return {"discarded": was}
+
+    def list_recordings(self):
+        with self.lock:
+            out = []
+            for name, clip in self._recordings_store.items():
+                if not isinstance(clip, dict):
+                    continue
+                out.append({
+                    "name": clip.get("name", name),
+                    "duration": clip.get("duration", 0.0),
+                    "motors": clip.get("motors", []),
+                    "channel": clip.get("channel"),
+                    "created_at": clip.get("created_at"),
+                })
+            out.sort(key=lambda c: c.get("created_at") or 0)
+            return out
+
+    def delete_recording(self, name):
+        name = str(name)
+        with self.lock:
+            existed = self._recordings_store.pop(name, None) is not None
+            if existed:
+                self._write_recordings()
+        return {"deleted": existed}
+
+    def rename_recording(self, name, new_name):
+        name = str(name)
+        new_name = str(new_name or "").strip()
+        if not new_name:
+            raise ValueError("a new name is required")
+        with self.lock:
+            clip = self._recordings_store.get(name)
+            if not isinstance(clip, dict):
+                raise RuntimeError(f"recording {name!r} not found")
+            if new_name != name and new_name in self._recordings_store:
+                raise RuntimeError(
+                    f"a recording named {new_name!r} already exists")
+            self._recordings_store.pop(name, None)
+            clip["name"] = new_name
+            self._recordings_store[new_name] = clip
+            self._write_recordings()
+        return {"name": new_name}
+
+    def start_playback(self, names, loop=False):
+        names = [str(n) for n in (names or [])]
+        if not names:
+            raise ValueError("no recordings selected")
+        with self.lock:
+            clips = []
+            for n in names:
+                clip = self._recordings_store.get(n)
+                if not isinstance(clip, dict):
+                    raise ValueError(f"recording {n!r} not found")
+                if clip.get("frames"):
+                    clips.append(clip)
+            if not clips:
+                raise ValueError("the selected recordings are empty")
+            channel = str(clips[0].get("channel", self.channel))
+            for c in clips:
+                if str(c.get("channel")) != channel:
+                    raise ValueError(
+                        "all recordings must be on the same arm")
+            motor_ids = set()
+            for c in clips:
+                for fr in c["frames"]:
+                    motor_ids.update(int(m) for m in fr[1])
+
+        def run():
+            self._activate(channel)
+            with self.lock:
+                self._recorder = None
+                for mid in sorted(motor_ids):
+                    if self._key(channel, mid) not in self.motors:
+                        raise RuntimeError(
+                            f"motor {mid} on arm {channel} is not connected")
+                # Hold each motor at its current position with the first clip's
+                # gains before enabling, so enabling never jolts the arm.
+                for mid in sorted(motor_ids):
+                    mh = self.motors[self._key(channel, mid)]
+                    cur = mh.state.get("pos")
+                    if cur is None:
+                        cur = mh.sp["pos"]
+                    self._write_play_setpoint(mh, float(cur), clips[0])
+                    mh.estopped = False
+                self._player = {
+                    "active": True,
+                    "names": names,
+                    "queue": clips,
+                    "channel": channel,
+                    "loop": bool(loop),
+                    "idx": 0,
+                    "motors": sorted(motor_ids),
+                    "elapsed": 0.0,
+                    "current": clips[0].get("name", names[0]),
+                    "phase": "approach",
+                    "start": time.time(),
+                    "approach": {},
+                }
+                self._begin_clip_approach(time.time())
+            for mid in sorted(motor_ids):
+                self._do_enable(channel, mid)
+            return {"channel": channel, "clips": len(clips),
+                    "motors": sorted(motor_ids)}
+
+        return self._submit(run, timeout=30.0)
+
+    def stop_playback(self):
+        with self.lock:
+            was = self._player is not None
+            self._player = None
+        return {"stopped": was}
+
+    def _playback_status(self) -> Optional[dict]:
+        pl = self._player
+        if pl is None:
+            return None
+        total = len(pl["queue"])
+        return {
+            "active": True,
+            "channel": pl["channel"],
+            "names": list(pl["names"]),
+            "loop": pl["loop"],
+            "phase": pl["phase"],
+            "index": pl["idx"],
+            "total": total,
+            "current": pl.get("current", ""),
+            "elapsed": pl.get("elapsed", 0.0),
+            "motors": list(pl["motors"]),
+        }
+
+    def _recorder_status(self) -> Optional[dict]:
+        rec = self._recorder
+        if rec is None:
+            return None
+        return {
+            "active": True,
+            "channel": rec["channel"],
+            "elapsed": round(time.time() - rec["start"], 2),
+            "frames": len(rec["frames"]),
+            "motors": sorted(int(m) for m in rec["gains"]),
+        }
+
     def status(self) -> dict:
         with self.lock:
             motors = [self.motors[k].status() for k in sorted(self.motors)]
@@ -1881,6 +2425,9 @@ class MotorService:
                 "fault": self.fault,
                 "connected": bool(self.motors),
                 "motors": motors,
+                "recordings": self.list_recordings(),
+                "recorder": self._recorder_status(),
+                "player": self._playback_status(),
             }
 
     def shutdown(self):
