@@ -215,6 +215,13 @@ To stop the dashboard, return to the terminal and press **Ctrl-C**.
 > The dashboard binds to `127.0.0.1` (this machine only) by default. To reach it
 > from another computer on the network, start it with
 > `HOST=0.0.0.0 ./run.sh` and browse to `http://<this-machine-ip>:5000`.
+>
+> **HTTPS (optional).** To serve over TLS — handy when a remote browser refuses
+> plain HTTP — generate a self-signed certificate once with `./gen_cert.sh` (it
+> writes `certs/server.crt` + `certs/server.key`, which are gitignored). `run.sh`
+> then serves `https://<this-machine-ip>:5000` automatically. On the other
+> computer, trust `certs/ca.crt` (or accept the browser warning). To use your own
+> certificate instead, point `MOTOR_CERT`/`MOTOR_KEY` at it.
 
 ---
 
@@ -534,4 +541,5 @@ Most people never need these. They're set as environment variables before
 | Re-calibrate everything | **Re-calibrate All** (or `rm calibrations.json`) |
 | Use a different port | `PORT=5050 ./run.sh` |
 | Reach it from another PC | `HOST=0.0.0.0 ./run.sh` |
+| Serve over HTTPS | `./gen_cert.sh` once, then `HOST=0.0.0.0 ./run.sh` |
 | Recover from weirdness | E-STOP → Ctrl-C → replug adapter → `./run.sh` |
