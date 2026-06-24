@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenArm Teleop</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #171b22; --panel2: #1e242d; --line: #2b3340;
+    --txt: #e6edf3; --dim: #8b97a7; --accent: #4d9fff; --good: #3fb950;
+    --warn: #d29922; --bad: #f85149; --lead: #b692ff; --foll: #4d9fff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 20px;
+    background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 650;
+    border: 1px solid var(--line); }
+  .badge.idle { color: var(--dim); }
+  .badge.monitor { color: var(--warn); border-color: var(--warn); }
+  .badge.following { color: var(--good); border-color: var(--good); }
+  .badge.estop { color: #fff; background: var(--bad); border-color: var(--bad); }
+  .msg { color: var(--dim); margin-left: auto; font-size: 13px; max-width: 50%;
+    text-align: right; }
+  main { padding: 18px 20px; max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--dim); font-weight: 700; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  button { background: var(--panel2); color: var(--txt); border: 1px solid var(--line);
+    padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #00264d; }
+  button.good { background: var(--good); border-color: var(--good); color: #07260f; }
+  button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+  button.warn { border-color: var(--warn); color: var(--warn); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    background: #3a4150; margin-right: 6px; vertical-align: middle; }
+  .dot.on { background: var(--good); box-shadow: 0 0 6px var(--good); }
+  .dot.off { background: #3a4150; }
+  .dot.bad { background: var(--bad); }
+  .buses { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .bus { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .bus .name { font-weight: 700; font-size: 15px; }
+  .bus .role { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; padding: 2px 7px;
+    border-radius: 6px; font-weight: 700; }
+  .role.leader { color: var(--lead); border: 1px solid var(--lead); }
+  .role.follower { color: var(--foll); border: 1px solid var(--foll); }
+  .bus .state { color: var(--dim); font-size: 12px; margin: 8px 0; }
+  .bus .mini { padding: 4px 9px; font-size: 12px; }
+  .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 860px) { .sides { grid-template-columns: 1fr; } }
+  .side h3 { margin: 0 0 4px; font-size: 15px; }
+  .side .flow { color: var(--dim); font-size: 12px; margin-bottom: 10px; }
+  .side .flow b.lead { color: var(--lead); } .side .flow b.foll { color: var(--foll); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 7px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  tr.inactive td { color: #56606e; }
+  tr.faulted td { color: var(--bad); }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--line); color: var(--dim); }
+  .summary { margin-top: 10px; font-size: 12px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 12px; }
+  .summary b { color: var(--txt); }
+  .skip { color: var(--warn); }
+  .ctl { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .field label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 4px;
+    text-transform: uppercase; letter-spacing: .5px; }
+  .field input[type=range] { width: 100%; }
+  .field .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 700; }
+  .hint { color: var(--dim); font-size: 12px; }
+  .estop-big { font-size: 15px; padding: 12px 26px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OpenArm Teleop</h1>
+  <span id="phase" class="badge idle">idle</span>
+  <span id="conn" class="hint"></span>
+  <span id="msg" class="msg"></span>
+</header>
+
+<main>
+  <!-- CAN buses -->
+  <section class="panel">
+    <h2>CAN buses</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button class="primary" onclick="busUpAll()">Bring up all buses</button>
+      <button onclick="api('/api/oa/connect')">Connect motors</button>
+      <button onclick="api('/api/oa/disconnect')">Disconnect</button>
+      <span class="hint">Buses use CAN-FD 1M/5M. Bring-up needs sudo.</span>
+    </div>
+    <div id="buses" class="buses"></div>
+  </section>
+
+  <!-- Controls -->
+  <section class="panel">
+    <h2>Teleoperation</h2>
+    <div class="row" style="margin-bottom:14px">
+      <button class="warn" onclick="teleop('monitor')">Monitor (dry, limp)</button>
+      <button class="good" onclick="teleop('follow')">▶ Start following</button>
+      <button onclick="teleop('stop')">■ Stop (limp)</button>
+      <button class="danger estop-big" onclick="teleop('estop')">E-STOP</button>
+      <button id="clearEstop" class="warn" style="display:none" onclick="teleop('clear_estop')">Clear E-STOP</button>
+      <button id="swapBtn" onclick="teleop('swap')">⇄ Swap leader/follower</button>
+      <button id="crossBtn" onclick="teleop('cross')">⇆ Swap L/R sides</button>
+    </div>
+    <div class="row" style="margin-bottom:14px">
+      <label class="hint" style="display:flex;align-items:center;gap:7px;cursor:pointer">
+        <input id="useCal" type="checkbox" onchange="pushParams()">
+        Clamp to saved calibration limits (off = full 1:1 range)
+      </label>
+    </div>
+    <div class="ctl">
+      <div class="field">
+        <label>Gain scale <span id="gsVal" class="val"></span></label>
+        <input id="gs" type="range" min="0.1" max="3" step="0.05" oninput="paramPreview()" onchange="pushParams()">
+      </div>
+      <div class="field">
+        <label>Max step (rad/tick) <span id="msVal" class="val"></span></label>
+        <input id="ms" type="range" min="0" max="0.5" step="0.01" oninput="paramPreview()" onchange="pushParams()">
+      </div>
+      <div class="field">
+        <label>Ramp-in (s) <span id="rmVal" class="val"></span></label>
+        <input id="rm" type="range" min="0" max="5" step="0.1" oninput="paramPreview()" onchange="pushParams()">
+      </div>
+      <div class="field">
+        <label>Feed-fwd torque (Nm) <span id="tauVal" class="val"></span></label>
+        <input id="tau" type="range" min="-3" max="3" step="0.1" oninput="paramPreview()" onchange="pushParams()">
+      </div>
+    </div>
+    <p class="hint" style="margin:12px 0 0">
+      Start with <b>Monitor</b>: both arms stay limp — hand-move a leader joint and check its follower
+      reads track. When the numbers agree, press <b>Start following</b>. Followers begin at their current
+      pose (no jump) and mirror the leader's motion <b>1:1</b> over the full physical range. Disconnected
+      joints are skipped automatically. If left and right are crossed, press <b>Swap L/R sides</b>.
+    </p>
+  </section>
+
+  <!-- Per-side arm status -->
+  <section class="sides" id="sides"></section>
+</main>
+
+<script>
+let last = null;
+
+function fmt(x) { return (x === null || x === undefined) ? "—" : x.toFixed(3); }
+
+function render(st) {
+  last = st;
+  // header
+  const ph = document.getElementById('phase');
+  const phase = st.estopped ? 'estop' : st.phase;
+  ph.className = 'badge ' + phase;
+  ph.textContent = st.estopped ? 'E-STOP' : st.phase;
+  document.getElementById('conn').textContent =
+    (st.connected ? '● connected' : '○ not connected') +
+    (st.swapped ? '  ·  leaders on unit B' : '  ·  leaders on unit A');
+  document.getElementById('msg').textContent = st.message || '';
+  document.getElementById('clearEstop').style.display = st.estopped ? '' : 'none';
+  document.getElementById('swapBtn').disabled = (st.phase !== 'idle');
+  document.getElementById('crossBtn').disabled = (st.phase !== 'idle');
+  const uc = document.getElementById('useCal');
+  if (document.activeElement !== uc) uc.checked = !!st.params.use_cal_limits;
+
+  // params (only set when not focused, so dragging isn't fought)
+  setSlider('gs', 'gsVal', st.params.gain_scale, 2, '×');
+  setSlider('ms', 'msVal', st.params.max_step, 2, '');
+  setSlider('rm', 'rmVal', st.params.ramp_s, 1, 's');
+  setSlider('tau', 'tauVal', st.params.tau, 1, '');
+
+  // buses
+  const bd = document.getElementById('buses');
+  bd.innerHTML = '';
+  for (const b of st.buses) {
+    const up = b.up, exists = b.exists;
+    const dotc = !exists ? 'bad' : (up ? 'on' : 'off');
+    const stateTxt = !exists ? 'not present (adapter unplugged)'
+                   : (up ? (b.open ? 'up · open' : 'up') : 'down');
+    const el = document.createElement('div');
+    el.className = 'bus';
+    el.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <span class="name"><span class="dot ${dotc}"></span>${b.name}</span>
+        <span class="role ${b.role}">${b.role}</span>
+      </div>
+      <div class="state">unit ${b.unit} · ${b.side} side · ${stateTxt}</div>
+      <div class="row">
+        <button class="mini" onclick="busUp('${b.name}')" ${!exists?'disabled':''}>Up</button>
+        <button class="mini" onclick="busDown('${b.name}')" ${!exists?'disabled':''}>Down</button>
+        <button class="mini" onclick="identify('${b.name}')" ${!b.open?'disabled':''}>Identify</button>
+      </div>`;
+    bd.appendChild(el);
+  }
+
+  // sides
+  const sd = document.getElementById('sides');
+  sd.innerHTML = '';
+  for (const s of st.sides) {
+    const sec = document.createElement('section');
+    sec.className = 'panel side';
+    let rows = '';
+    for (const j of s.joints) {
+      const cls = j.faulted ? 'faulted' : (j.active ? '' : 'inactive');
+      const ld = `<span class="dot ${j.leader_present?'on':'off'}"></span>`;
+      const fd = `<span class="dot ${j.faulted?'bad':(j.follower_present?'on':'off')}"></span>`;
+      const stt = j.follower_present && j.follower_status >= 0
+        ? (j.follower_status_text || ('code '+j.follower_status)) : '';
+      rows += `<tr class="${cls}">
+        <td>${j.id}</td><td>${j.model}</td>
+        <td>${ld}</td><td>${fd}</td>
+        <td class="num">${fmt(j.leader_pos)}</td>
+        <td class="num">${fmt(j.follower_pos)}</td>
+        <td>${j.faulted ? '<span style="color:var(--bad)">'+j.fault_text+'</span>' : stt}</td>
+      </tr>`;
+    }
+    const skip = [];
+    if (s.leader_only.length) skip.push(`leader-only (no follower): ${s.leader_only.join(', ')}`);
+    if (s.follower_only.length) skip.push(`follower-only (no leader): ${s.follower_only.join(', ')}`);
+    if (s.missing.length) skip.push(`absent on both: ${s.missing.join(', ')}`);
+    sec.innerHTML = `
+      <h3>${s.name} side</h3>
+      <div class="flow"><b class="lead">${s.leader_bus}</b> (leader) → <b class="foll">${s.follower_bus}</b> (follower)</div>
+      <table>
+        <thead><tr><th>J</th><th>model</th><th>lead</th><th>foll</th>
+          <th class="num">leader</th><th class="num">follower</th><th>status</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="summary">
+        <span><b>${s.active.length}</b> joints teleoperating${s.active.length?': '+s.active.join(', '):''}</span>
+        ${s.faulted.length ? `<span style="color:var(--bad)">faulted: ${s.faulted.join(', ')}</span>`:''}
+        ${skip.length ? `<span class="skip">skipped → ${skip.join('  ·  ')}</span>`:''}
+      </div>`;
+    sd.appendChild(sec);
+  }
+}
+
+function setSlider(id, valId, v, dp, suffix) {
+  const el = document.getElementById(id);
+  if (document.activeElement !== el) el.value = v;
+  document.getElementById(valId).textContent = Number(el.value).toFixed(dp) + suffix;
+}
+function paramPreview() {
+  setSlider('gs','gsVal',null,2,'×'); setSlider('ms','msVal',null,2,'');
+  setSlider('rm','rmVal',null,1,'s'); setSlider('tau','tauVal',null,1,'');
+}
+
+async function post(url, body) {
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body||{})});
+  const j = await r.json().catch(()=>({}));
+  if (!j.ok && j.error) flash(j.error);
+  if (j.status) render(j.status);
+  return j;
+}
+function api(url){ return post(url); }
+function teleop(action){ return post('/api/oa/teleop', {action}); }
+function busUpAll(){ return post('/api/oa/bus/up_all'); }
+function busUp(bus){ return post('/api/oa/bus/up', {bus}); }
+function busDown(bus){ return post('/api/oa/bus/down', {bus}); }
+function identify(bus){ return post('/api/oa/identify', {bus}); }
+function pushParams(){
+  post('/api/oa/params', {
+    gain_scale: +document.getElementById('gs').value,
+    max_step: +document.getElementById('ms').value,
+    ramp_s: +document.getElementById('rm').value,
+    tau: +document.getElementById('tau').value,
+    use_cal_limits: document.getElementById('useCal').checked,
+  });
+}
+
+let flashT;
+function flash(text) {
+  const m = document.getElementById('msg');
+  m.textContent = '⚠ ' + text; m.style.color = 'var(--bad)';
+  clearTimeout(flashT);
+  flashT = setTimeout(()=>{ m.style.color=''; }, 4000);
+}
+
+// Live status via SSE, with a polling fallback.
+function connectStream() {
+  try {
+    const es = new EventSource('/api/oa/stream');
+    es.onmessage = (e) => render(JSON.parse(e.data));
+    es.onerror = () => { es.close(); setTimeout(poll, 1000); };
+  } catch (e) { poll(); }
+}
+async function poll() {
+  try { render(await (await fetch('/api/oa/status')).json()); } catch (e) {}
+  setTimeout(poll, 300);
+}
+connectStream();
+</script>
+</body>
+</html>
