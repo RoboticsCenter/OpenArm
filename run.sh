@@ -40,9 +40,21 @@ if [ "${DM_DEVICE_TYPE}" = "socketcanfd" ] || [ "${DM_DEVICE_TYPE}" = "socketcan
       continue
     fi
     echo "Bringing up $iface (bitrate ${CAN_BITRATE}, dbitrate ${CAN_DBITRATE}, fd on)..."
-    sudo ip link set "$iface" type can bitrate "$CAN_BITRATE" \
-      dbitrate "$CAN_DBITRATE" fd on
-    sudo ip link set "$iface" up
+    # Never let a failed bring-up abort the launch (set -e): warn and continue so
+    # the dashboard still starts and simply reports this bus as disconnected.
+    if ! sudo ip link set "$iface" type can bitrate "$CAN_BITRATE" \
+         dbitrate "$CAN_DBITRATE" fd on 2>/dev/null; then
+      echo "WARNING: CAN-FD config failed on $iface; trying classic CAN (no FD)..." >&2
+      if ! sudo ip link set "$iface" type can bitrate "$CAN_BITRATE" 2>/dev/null; then
+        echo "WARNING: could not configure $iface (Operation not supported?)." >&2
+        echo "         Skipping it; plug/replug the adapter or bring it up by hand." >&2
+        echo "         The dashboard will still start." >&2
+        continue
+      fi
+    fi
+    if ! sudo ip link set "$iface" up 2>/dev/null; then
+      echo "WARNING: could not bring $iface up; continuing (it'll show as disconnected)." >&2
+    fi
   done
 fi
 
