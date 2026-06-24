@@ -287,6 +287,11 @@ Below the action bar you get a card for **each joint** (J1…J8).
 > was found during the scan but has **no motors connected yet** shows up as a
 > **greyed-out (disabled) tab** — that's normal. Connect its motors (back in the
 > Connect step) and the tab becomes selectable.
+>
+> Switching tabs only changes which arm you're looking at — **both CAN buses
+> stay live**, so the other arm keeps holding its position. The same is true
+> while you calibrate a single joint: the arms you aren't calibrating stay
+> powered and hold position rather than going limp.
 
 For each joint card:
 
@@ -498,16 +503,22 @@ Most people never need these. They're set as environment variables before
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | Web address to bind (`0.0.0.0` to allow other machines). |
 | `PORT` | `5000` | Web port. |
-| `DM_DEVICE_TYPE` | `usb2canfd-dual` | Adapter type for the DaMiao SDK. |
-| `DM_CHANNEL` | `0` | Default CAN channel. |
+| `DM_DEVICE_TYPE` | `socketcanfd` | Adapter transport. Defaults to SocketCAN-FD (the gs_usb adapter). Override to `usb2canfd-dual` only for a real DaMiao DM-USB2FDCAN USB adapter. |
+| `DM_CHANNEL` | `can0,can1` | CAN channel(s), comma-separated. Both buses are opened by default. (Use `0` for a DaMiao USB adapter.) |
 | `DM_MODEL` | `4310` | Model hint used before auto-detect. |
 | `CAL_SPEED_RAD_S` | `1.25` | Auto-calibration sweep speed. |
 | `CAL_MIN_SPAN_RAD` | `0.75` | Minimum valid hardstop-to-hardstop span. |
 | `DM_CALIBRATION_STORE` | `calibrations.json` | Where calibration is saved. |
 
-> Note: the `usb2canfd-dual` device type is the one verified to work with this
-> hardware; the plain `usb2canfd` and `linkx4c` types can crash the SDK on this
-> adapter.
+> By default `run.sh` uses the **SocketCAN-FD** transport (`socketcanfd`) over
+> the gs_usb adapter and opens **both** channels (`can0,can1`) — you don't need
+> to set `DM_DEVICE_TYPE` or `DM_CHANNEL` yourself. `run.sh` also brings each
+> SocketCAN interface up automatically (running `sudo ip link set canX … up`),
+> so **passwordless `sudo ip`** is required for it to start without a prompt; it
+> skips interfaces that are already up or not present. Only override these for a
+> real DaMiao DM-USB2FDCAN USB adapter, where `usb2canfd-dual` is the verified
+> device type (the plain `usb2canfd` and `linkx4c` types can crash the SDK on
+> that adapter).
 
 ---
 
