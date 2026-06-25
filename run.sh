@@ -15,6 +15,10 @@ export DM_CHANNEL="${DM_CHANNEL:-can0,can1}"
 # CAN-FD bitrates (DaMiao default: 1 Mbit nominal / 5 Mbit data).
 CAN_BITRATE="${CAN_BITRATE:-1000000}"
 CAN_DBITRATE="${CAN_DBITRATE:-5000000}"
+# SocketCAN TX queue length. The default (10) is tiny and overflows during
+# bursts (homing/enabling several motors at once), causing writes to fail with
+# ENOBUFS "No buffer space available (os error 105)". Bump it well above that.
+CAN_TXQUEUELEN="${CAN_TXQUEUELEN:-1000}"
 
 # Point the DaMiao DM_Device SDK at the runtime fetched by
 # `motorbridge-install-dm-device --download` (cached in ~/.cache). Only needed
@@ -36,6 +40,10 @@ if [ "${DM_DEVICE_TYPE}" = "socketcanfd" ] || [ "${DM_DEVICE_TYPE}" = "socketcan
       echo "WARNING: SocketCAN interface '$iface' not found (is the USB-CAN adapter plugged in?)" >&2
       continue
     fi
+    # Enlarge the TX queue so bursty writes don't fail with ENOBUFS. Safe to set
+    # whether the link is up or down; never let it abort the launch.
+    sudo ip link set "$iface" txqueuelen "$CAN_TXQUEUELEN" 2>/dev/null || \
+      echo "WARNING: could not set txqueuelen on $iface; continuing." >&2
     if ip link show "$iface" | grep -q "state UP"; then
       continue
     fi
