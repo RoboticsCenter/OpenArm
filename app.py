@@ -297,6 +297,22 @@ def api_home():
     return _ok(**res)
 
 
+@app.route("/api/gesture", methods=["POST"])
+def api_gesture():
+    body = request.get_json(silent=True) or {}
+    name = body.get("name")
+    try:
+        if body.get("stop"):
+            service.stop_gesture()
+            return _ok(stopped=True)
+        speed = body.get("speed")
+        info = service.play_gesture(
+            name, speed=float(speed) if speed is not None else None)
+    except Exception as e:
+        return _err(e, 400)
+    return _ok(**info)
+
+
 @app.route("/api/stream")
 def api_stream():
     def gen():

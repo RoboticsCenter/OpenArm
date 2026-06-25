@@ -197,6 +197,39 @@
   </div>
 </header>
 
+<style>
+  .gesturebar{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;
+    padding:.5rem 1rem;background:#161b22;border-bottom:1px solid #30363d;}
+  .gesturebar-label{font-weight:600;color:#8b949e;margin-right:.25rem;}
+  .gesture-btn{cursor:pointer;border:1px solid #30363d;background:#21262d;
+    color:#e6edf3;border-radius:6px;padding:.4rem .8rem;font-size:.9rem;}
+  .gesture-btn:hover:not(:disabled){background:#2d333b;border-color:#8b949e;}
+  .gesture-btn:disabled{opacity:.5;cursor:not-allowed;}
+  .gesture-msg{color:#8b949e;font-size:.85rem;margin-left:.5rem;}
+  .gesture-msg.fault{color:#f85149;}
+  .gesture-speed{display:flex;align-items:center;gap:.4rem;margin-left:.75rem;
+    color:#8b949e;font-size:.85rem;}
+  .gesture-speed input[type=range]{accent-color:#58a6ff;width:120px;}
+  #gestureSpeedVal{min-width:2.6rem;text-align:right;color:#e6edf3;
+    font-variant-numeric:tabular-nums;}
+  .gesture-stop{cursor:pointer;border:1px solid #6e2530;background:#2d1417;
+    color:#f85149;border-radius:6px;padding:.4rem .8rem;font-size:.9rem;}
+  .gesture-stop:hover{background:#3d1a1f;border-color:#f85149;}
+</style>
+<div class="gesturebar" title="Hardcoded OpenArm demo motions (requires calibrated arms)">
+  <span class="gesturebar-label">Demos:</span>
+  <button class="gesture-btn" data-gesture="wave" title="Wave with the right arm">Wave</button>
+  <button class="gesture-btn" data-gesture="clap" title="Clap with both arms">Clap</button>
+  <button class="gesture-btn" data-gesture="dab" title="Dab">Dab</button>
+  <button id="gestureStop" class="gesture-stop" title="Stop the current demo immediately">Stop</button>
+  <label class="gesture-speed" title="Lower is slower and safer">
+    Speed
+    <input id="gestureSpeed" type="range" min="0.1" max="1.0" step="0.05" value="0.5">
+    <span id="gestureSpeedVal">0.50×</span>
+  </label>
+  <span id="gestureMsg" class="gesture-msg"></span>
+</div>
+
 <div class="wrap">
   <div id="wizard">
   <!-- Progress stepper -->
@@ -1718,6 +1751,42 @@ function connectSSE(){
   es.onerror=()=>{G("busTxt").textContent="reconnecting…";};
 }
 connectSSE();
+
+// Hardcoded OpenArm demo gestures (wave / clap / dab).
+(function(){
+  const msg=document.getElementById("gestureMsg");
+  const btns=Array.from(document.querySelectorAll(".gesture-btn"));
+  const speed=document.getElementById("gestureSpeed");
+  const speedVal=document.getElementById("gestureSpeedVal");
+  const stopBtn=document.getElementById("gestureStop");
+  const labels={wave:"Waving with the right arm",clap:"Clapping with both arms",dab:"Dabbing"};
+  const showSpeed=()=>{ if(speedVal) speedVal.textContent=Number(speed.value).toFixed(2)+"×"; };
+  if(speed){ speed.oninput=showSpeed; showSpeed(); }
+  btns.forEach(b=>{
+    b.onclick=async()=>{
+      const name=b.dataset.gesture;
+      const spd=speed?Number(speed.value):undefined;
+      btns.forEach(x=>x.disabled=true);
+      flash(msg, (labels[name]||name)+` (speed ${Number(spd||0.5).toFixed(2)}×)…`);
+      try{
+        const r=await post("/api/gesture",{name,speed:spd});
+        if(r.ok){
+          const arms=(r.arms||[]).length;
+          flash(msg, `${labels[name]||name} at ${Number(r.speed||spd||0.5).toFixed(2)}× (${(r.joints||[]).length} joints${arms?` on ${arms} arm${arms>1?'s':''}`:''}).`);
+        }else{
+          flash(msg, r.error||"gesture failed", true);
+        }
+      }catch(e){ flash(msg, String(e), true); }
+      finally{ setTimeout(()=>btns.forEach(x=>x.disabled=false), 800); }
+    };
+  });
+  if(stopBtn){
+    stopBtn.onclick=async()=>{
+      try{ await post("/api/gesture",{stop:true}); flash(msg,"Demo stopped."); }
+      catch(e){ flash(msg, String(e), true); }
+    };
+  }
+})();
 window.addEventListener("resize",()=>Object.values(cards).forEach(c=>c.node.querySelector(".m-plot")));
 updateStepper();
 

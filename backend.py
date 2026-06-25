@@ -103,6 +103,18 @@ CAL_MIN_SPAN_RAD = _env_float("CAL_MIN_SPAN_RAD", 0.75)
 CAL_CENTER_TOL_RAD = 0.06
 CAL_MIT_KP = _env_float("CAL_MIT_KP", 10.0)
 CAL_MIT_KD = _env_float("CAL_MIT_KD", 0.45)
+
+# Demo gestures (wave / clap / dab). Gentle MIT gains, and how much of each
+# joint's calibrated half-range to use so motion stays clear of the hardstops.
+GESTURE_KP = _env_float("GESTURE_KP", 12.0)
+GESTURE_KD = _env_float("GESTURE_KD", 0.6)
+GESTURE_SAFE_SCALE = _env_float("GESTURE_SAFE_SCALE", 0.8)
+GESTURE_STEP_S = 0.03
+# Speed multiplier applied to every gesture: <1.0 is slower (and safer),
+# 1.0 is the choreographed baseline. Default is half-speed for safety.
+GESTURE_SPEED = _env_float("GESTURE_SPEED", 0.5)
+GESTURE_SPEED_MIN = _env_float("GESTURE_SPEED_MIN", 0.1)
+GESTURE_SPEED_MAX = _env_float("GESTURE_SPEED_MAX", 1.0)
 CAL_MIT_TARGET_LEAD_RAD = _env_float("CAL_MIT_TARGET_LEAD_RAD", 0.18)
 CAL_MIT_MAX_KP = _env_float("CAL_MIT_MAX_KP", 22.0)
 CAL_MIT_MAX_TARGET_LEAD_RAD = _env_float("CAL_MIT_MAX_TARGET_LEAD_RAD", 0.40)
@@ -334,6 +346,12 @@ class MotorService:
         # arm energized and holding.
         self._built: "Dict[str, tuple]" = {}
         self._active_channel: Optional[str] = None
+
+        # Hardcoded demo gestures run in a background thread that rewrites motor
+        # setpoints over time while _tick streams them to hardware.
+        self._gesture_thread: Optional[threading.Thread] = None
+        self._gesture_name: Optional[str] = None
+        self._gesture_stop = threading.Event()
 
         self._q: "queue.Queue[_Cmd]" = queue.Queue()
         self._stop = False
@@ -2159,6 +2177,8 @@ class MotorService:
         # motor(s) disabled every tick, then fire an immediate disable. The latch
         # stays until the user explicitly re-enables. With no target, every motor
         # on every arm is stopped.
+        # Cancel any running demo gesture so it stops driving setpoints.
+        self._gesture_stop.set()
         with self.lock:
             if motor_id is not None and channel is not None:
                 key = self._key(channel, motor_id)
@@ -2266,6 +2286,209 @@ class MotorService:
                 mh.sp["vlim"] = _clamp(float(kw["vlim"]), 0.0, vmax)
             if "ratio" in kw:
                 mh.sp["ratio"] = _clamp(float(kw["ratio"]), 0.0, 1.0)
+
+    # ------------------------------------------------------------------ #
+    # Hardcoded demo gestures (wave / clap / dab)
+    # ------------------------------------------------------------------ #
+    def _pick_arms(self):
+        """Return (left_channel, right_channel); either may be None.
+
+        Uses saved arm sides when they distinguish the arms, else falls back to
+        sorted channel order (first present = left, second = right)."""
+        chans = self._channels_present()
+        left = right = None
+        for ch in chans:
+            side = self.get_arm_side(ch)
+            if side == "right" and right is None:
+                right = ch
+            elif side == "left" and left is None:
+                left = ch
+        if left is None and right is None:
+            left = chans[0] if chans else None
+            right = chans[1] if len(chans) > 1 else None
+        elif right is None:
+            right = next((c for c in chans if c != left), None)
+        elif left is None:
+            left = next((c for c in chans if c != right), None)
+        return left, right
+
+    def _gesture_motor(self, channel, motor_id):
+        """A motor handle eligible for gestures: connected AND calibrated
+        (so targets stay within known soft limits). Else None (skip it)."""
+        if channel is None:
+            return None
+        mh = self.motors.get(self._key(channel, motor_id))
+        if mh is None or mh._motor is None:
+            return None
+        if mh.pos_min is None or mh.pos_max is None:
+            return None
+        return mh
+
+    @staticmethod
+    def _frac_to_pos(mh, frac):
+        """Map a signed fraction [-1, 1] to a position inside the calibrated
+        range (0 = center). Positive -> toward pos_max, negative -> pos_min."""
+        frac = _clamp(float(frac), -1.0, 1.0) * GESTURE_SAFE_SCALE
+        if frac >= 0:
+            return frac * float(mh.pos_max)
+        return (-frac) * float(mh.pos_min)
+
+    def _gesture_estopped(self, involved) -> bool:
+        with self.lock:
+            for k in involved:
+                mh = self.motors.get(k)
+                if mh is not None and mh.estopped:
+                    return True
+        return False
+
+    def _build_gesture(self, name):
+        """Return (keyframes, involved, info). Each keyframe is
+        (move_s, hold_s, [(channel, motor_id, frac), ...]); only connected +
+        calibrated motors are kept, so the gesture degrades gracefully."""
+        left, right = self._pick_arms()
+        chans = self._channels_present()
+        primary = right or left or (chans[0] if chans else None)
+
+        def P(ch, mid, frac):
+            return (ch, mid, frac) if self._gesture_motor(ch, mid) else None
+
+        def KF(move_s, hold_s, *poses):
+            return (move_s, hold_s, [p for p in poses if p is not None])
+
+        keyframes = []
+        if name == "wave":
+            a = primary
+            keyframes += [
+                KF(0.8, 0.3, P(a, 2, 0.55), P(a, 4, 0.45)),  # raise arm
+                KF(0.35, 0.1, P(a, 6, 0.7)),                 # wrist over
+                KF(0.35, 0.1, P(a, 6, -0.5)),                # and back
+                KF(0.35, 0.1, P(a, 6, 0.7)),
+                KF(0.35, 0.1, P(a, 6, -0.5)),
+                KF(0.35, 0.3, P(a, 6, 0.0)),
+            ]
+        elif name == "clap":
+            arms = [c for c in (left, right) if c] or ([primary] if primary else [])
+            keyframes.append(KF(0.6, 0.2, *[P(c, 2, 0.45) for c in arms]))  # raise
+            for _ in range(3):
+                together, apart = [], []
+                for c in arms:
+                    sign = -1.0 if c == right else 1.0
+                    together.append(P(c, 1, 0.45 * sign))
+                    apart.append(P(c, 1, 0.1 * sign))
+                keyframes.append(KF(0.28, 0.12, *together))
+                keyframes.append(KF(0.30, 0.12, *apart))
+        elif name == "dab":
+            r = right or primary
+            l = left or next((c for c in chans if c != r), None)
+            keyframes.append(KF(0.7, 1.5,
+                                 P(r, 2, 0.7), P(r, 1, -0.5), P(r, 4, 0.1),
+                                 P(l, 2, 0.5), P(l, 4, 0.8), P(l, 1, 0.3)))
+        else:
+            raise ValueError(f"unknown gesture {name!r}")
+
+        involved = set()
+        for _move, _hold, poses in keyframes:
+            for ch, mid, _f in poses:
+                involved.add((ch, mid))
+        info = {"arms": sorted({ch for ch, _ in involved}),
+                "joints": sorted({mid for _, mid in involved})}
+        return keyframes, involved, info
+
+    def _ramp(self, cur, target, involved, move_s, speed=1.0):
+        # Lower speed -> longer ramp time -> lower joint velocity (safer).
+        move_s = float(move_s) / max(1e-3, float(speed))
+        steps = max(1, int(move_s / GESTURE_STEP_S))
+        for s in range(1, steps + 1):
+            if self._gesture_stop.is_set() or self._gesture_estopped(involved):
+                return False
+            a = s / steps
+            for k in involved:
+                mh = self.motors.get(k)
+                if mh is None or mh._motor is None:
+                    continue
+                f = cur.get(k, 0.0) * (1.0 - a) + target.get(k, 0.0) * a
+                self.set_targets(k[0], k[1], pos=self._frac_to_pos(mh, f),
+                                 kp=GESTURE_KP, kd=GESTURE_KD, vel=0.0, tau=0.0)
+            time.sleep(GESTURE_STEP_S)
+        return True
+
+    def _run_gesture(self, name, keyframes, involved, speed=1.0):
+        speed = float(speed)
+        try:
+            # Enable involved motors in MIT mode, holding at center to start.
+            for (ch, mid) in involved:
+                if self._gesture_stop.is_set():
+                    return
+                with self.lock:
+                    mh = self.motors.get((ch, mid))
+                    if mh is not None:
+                        mh.mode = "mit"
+                self.set_targets(ch, mid, pos=0.0, vel=0.0, tau=0.0,
+                                 kp=GESTURE_KP, kd=GESTURE_KD)
+                try:
+                    self.enable(ch, mid)
+                except Exception:  # noqa: BLE001
+                    pass
+            cur = {k: 0.0 for k in involved}
+            for move_s, hold_s, poses in keyframes:
+                if self._gesture_stop.is_set() or self._gesture_estopped(involved):
+                    break
+                target = dict(cur)
+                for ch, mid, frac in poses:
+                    if (ch, mid) in target:
+                        target[(ch, mid)] = frac
+                if not self._ramp(cur, target, involved, move_s, speed):
+                    break
+                cur = target
+                # Hold, checking for stop/e-stop in small slices.
+                t_end = time.time() + float(hold_s) / max(1e-3, speed)
+                while time.time() < t_end:
+                    if self._gesture_stop.is_set() or self._gesture_estopped(involved):
+                        break
+                    time.sleep(GESTURE_STEP_S)
+            # Return to center and hold there (unless stopped / e-stopped).
+            if not self._gesture_stop.is_set() and not self._gesture_estopped(involved):
+                self._ramp(cur, {k: 0.0 for k in involved}, involved, 0.7, speed)
+        finally:
+            with self.lock:
+                self._gesture_name = None
+                self._gesture_thread = None
+
+    def stop_gesture(self):
+        self._gesture_stop.set()
+        t = self._gesture_thread
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=2.0)
+        with self.lock:
+            self._gesture_name = None
+            self._gesture_thread = None
+
+    def play_gesture(self, name, speed=None):
+        """Start a hardcoded demo gesture (wave / clap / dab) in the background.
+        `speed` is a multiplier (<1.0 slower/safer, 1.0 baseline); it is clamped
+        to [GESTURE_SPEED_MIN, GESTURE_SPEED_MAX]. Returns immediately with which
+        arms/joints will move."""
+        name = str(name).lower()
+        if name not in ("wave", "clap", "dab"):
+            raise ValueError(f"unknown gesture {name!r}")
+        if speed is None:
+            speed = GESTURE_SPEED
+        speed = _clamp(float(speed), GESTURE_SPEED_MIN, GESTURE_SPEED_MAX)
+        self.stop_gesture()
+        keyframes, involved, info = self._build_gesture(name)
+        if not involved:
+            raise RuntimeError(
+                "no connected + calibrated motors for this gesture; "
+                "calibrate the arm(s) first")
+        self._gesture_stop.clear()
+        t = threading.Thread(target=self._run_gesture,
+                             args=(name, keyframes, involved, speed),
+                             name=f"gesture-{name}", daemon=True)
+        with self.lock:
+            self._gesture_name = name
+            self._gesture_thread = t
+        t.start()
+        return {"name": name, "speed": speed, **info}
 
     # ------------------------------------------------------------------ #
     # Movement recording / playback (public API; called from HTTP threads)
@@ -2481,6 +2704,7 @@ class MotorService:
                 "recordings": self.list_recordings(),
                 "recorder": self._recorder_status(),
                 "player": self._playback_status(),
+                "gesture": self._gesture_name,
             }
 
     def shutdown(self):
