@@ -2445,15 +2445,14 @@ class MotorService:
         keyframes = []
         if name == "wave":
             a = primary
-            # Verified on-arm joint behaviour (right arm): J1 raises the whole
-            # arm up (toward pos_min), J4 raises the forearm up, and J8 rotates
-            # the gripper -- oscillating J8 gives the "waving hand" motion.
-            # A keyframe only moves the joints it lists; the others hold, so the
-            # raised arm/forearm stay up while the hand waves.
+            # J1's calibrated range only allows BACKWARD motion (its forward
+            # side is a hard stop at pos_max=0, and the arm rests there), so
+            # moving J1 always swings the arm back. To keep the arm forward we
+            # leave J1 at rest and do the wave with the forearm (J4, raised as
+            # high as the safe range allows) and the gripper (J8) waving.
             keyframes += [
-                KF(1.6, 0.4, P(a, 1, -0.70)),   # 1. raise the whole arm up
-                KF(1.2, 0.4, P(a, 4, 0.80)),    # 2. raise the forearm
-                KF(0.45, 0.05, P(a, 8, 0.95)),  # 3. wave the hand: rotate grip
+                KF(1.4, 0.4, P(a, 4, 1.0)),     # 1. raise the forearm high
+                KF(0.45, 0.05, P(a, 8, 0.95)),  # 2. wave the hand: rotate grip
                 KF(0.45, 0.05, P(a, 8, -0.95)),
                 KF(0.45, 0.05, P(a, 8, 0.95)),
                 KF(0.45, 0.05, P(a, 8, -0.95)),
