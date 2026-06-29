@@ -2445,45 +2445,43 @@ class MotorService:
         keyframes = []
         if name == "wave":
             a = primary
+            # Verified on-arm joint behaviour (right arm): J1 raises the whole
+            # arm up (toward pos_min), J4 raises the forearm up, and J8 rotates
+            # the gripper -- oscillating J8 gives the "waving hand" motion.
+            # A keyframe only moves the joints it lists; the others hold, so the
+            # raised arm/forearm stay up while the hand waves.
             keyframes += [
-                # Raise the upper arm (J2) and bend the elbow up (J4) so the
-                # forearm/hand comes up to a clear waving pose.
-                KF(1.4, 0.5, P(a, 2, -0.7), P(a, 4, 0.7)),
-                # Wave: sweep the raised forearm side to side at the shoulder
-                # (J1) a few times, staying in the middle of its travel.
-                KF(0.9, 0.12, P(a, 1, -0.30)),
-                KF(0.9, 0.12, P(a, 1, -0.62)),
-                KF(0.9, 0.12, P(a, 1, -0.30)),
-                KF(0.9, 0.12, P(a, 1, -0.62)),
-                KF(1.0, 0.4, P(a, 1, -0.46)),  # settle centered
+                KF(1.6, 0.4, P(a, 1, -0.70)),   # 1. raise the whole arm up
+                KF(1.2, 0.4, P(a, 4, 0.80)),    # 2. raise the forearm
+                KF(0.45, 0.05, P(a, 8, 0.95)),  # 3. wave the hand: rotate grip
+                KF(0.45, 0.05, P(a, 8, -0.95)),
+                KF(0.45, 0.05, P(a, 8, 0.95)),
+                KF(0.45, 0.05, P(a, 8, -0.95)),
+                KF(0.45, 0.3, P(a, 8, 0.0)),    # center the hand, keep arm up
             ]
         elif name == "clap":
             arms = [c for c in (left, right) if c] or ([primary] if primary else [])
-            # Mirror the two arms so they angle inward toward the midline.
-            def _mirror(c):
-                return 1.0 if c == right else -1.0
-            # 1. Raise both arms and bring the forearms together in front
-            #    center: shoulder lift (J2), shoulder rotation inward (J3),
-            #    elbow flex (J4).
-            raise_poses = []
-            for c in arms:
-                raise_poses += [P(c, 2, -0.55),
-                                P(c, 3, 0.45 * _mirror(c)),
-                                P(c, 4, 0.78)]
-            keyframes.append(KF(1.5, 0.4, *raise_poses))
-            # 2. Clap 3 times with a small, gentle elbow tap (hands meet, then
-            #    part slightly) -- no fast base-motor swings.
+            # These arms have no left/right swing joint, so the hands meet by
+            # raising both arms forward (J1 up) and STRAIGHTENING the forearms
+            # (J4 toward straighten = negative) so the hands reach toward the
+            # centerline, then tapping J4 in and out for the claps.
+            # 1. Raise both arms forward/up.
+            keyframes.append(KF(1.5, 0.25, *[P(c, 1, -0.55) for c in arms]))
+            # 2. Straighten/extend the forearms so the hands reach center.
+            keyframes.append(KF(1.0, 0.3, *[P(c, 4, -0.55) for c in arms]))
+            # 3. Clap 3x: reach the hands fully in, then part slightly.
             for _ in range(3):
-                together = [P(c, 4, 0.95) for c in arms]
-                apart = [P(c, 4, 0.78) for c in arms]
-                keyframes.append(KF(0.5, 0.1, *together))
-                keyframes.append(KF(0.55, 0.15, *apart))
+                keyframes.append(KF(0.45, 0.08, *[P(c, 4, -0.85) for c in arms]))
+                keyframes.append(KF(0.5, 0.12, *[P(c, 4, -0.5) for c in arms]))
         elif name == "dab":
             r = right or primary
             l = left or next((c for c in chans if c != r), None)
-            keyframes.append(KF(0.7, 1.5,
-                                 P(r, 2, 0.7), P(r, 1, -0.5), P(r, 4, 0.1),
-                                 P(l, 2, 0.5), P(l, 4, 0.8), P(l, 1, 0.3)))
+            # Simple dab: raise the right arm up and out and extend its forearm
+            # (J1 up, J4 straighten), while the left arm raises and its forearm
+            # comes up/across toward the body (J1 partway up, J4 up like a tuck).
+            keyframes.append(KF(1.2, 1.8,
+                                 P(r, 1, -0.85), P(r, 4, -0.6),
+                                 P(l, 1, -0.40), P(l, 4, 0.85)))
         else:
             raise ValueError(f"unknown gesture {name!r}")
 
