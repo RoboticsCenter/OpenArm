@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import queue
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -103,6 +104,24 @@ CAL_MIN_SPAN_RAD = _env_float("CAL_MIN_SPAN_RAD", 0.75)
 CAL_CENTER_TOL_RAD = 0.06
 CAL_MIT_KP = _env_float("CAL_MIT_KP", 10.0)
 CAL_MIT_KD = _env_float("CAL_MIT_KD", 0.45)
+
+# Auto-calibration records pos_min/pos_max AT the mechanical hard stops (it drives
+# into them to find the range). If we let commands reach those exact angles, the
+# position controller keeps pushing the motor into the stop -> it can't get there,
+# so it stalls and buzzes loudly. Hold commanded targets this far inside each
+# calibrated stop so the controller never fights a hard stop. Only applied to
+# *calibrated* motors; capped so it can never collapse a small range.
+CMD_LIMIT_MARGIN_RAD = _env_float("MOTOR_LIMIT_MARGIN_RAD", 0.08)
+
+# Maximum allowed MIT derivative gain (Kd). Measured on this hardware: with the
+# 50 Hz command loop, Kd >= ~3.5 makes the impedance controller go into a
+# sustained limit-cycle oscillation once any motion excites it -- the joint
+# settles near the target but then buzzes/stutters with the velocity swinging
+# several rad/s and never decays until E-stop. (Kd <= 3.0 is clean on every
+# joint tested.) The old default Kd=4 sat squarely in the unstable zone. We cap
+# Kd server-side so a stale browser value or an old recorded clip can never
+# command an oscillating gain. Raise MOTOR_KD_MAX only if you retune the loop.
+KD_MAX_SAFE = _env_float("MOTOR_KD_MAX", 2.5)
 
 # Demo gestures (wave / clap / dab). Gentle MIT gains, and how much of each
 # joint's calibrated half-range to use so motion stays clear of the hardstops.
@@ -183,6 +202,26 @@ PLAYBACK_APPROACH_S = _env_float("DM_PLAYBACK_APPROACH_S", 1.5)
 
 def _clamp(x, lo, hi):
     return lo if x < lo else hi if x > hi else x
+
+
+def _cmd_pos_bounds(mh, margin: float = CMD_LIMIT_MARGIN_RAD):
+    """Effective [lo, hi] for *commanded* positions of one motor.
+
+    For a calibrated motor the calibrated stops are the mechanical hard stops,
+    so we pull the command bounds in by ``margin`` to keep the controller from
+    driving the motor into a stop (which stalls/buzzes). Uncalibrated motors
+    keep their full physical range. The margin is capped at 25% of the span so
+    a small joint range can never invert or collapse to a point."""
+    pmax = mh.limits[0]
+    pos_min = -pmax if mh.pos_min is None else mh.pos_min
+    pos_max = pmax if mh.pos_max is None else mh.pos_max
+    if mh.pos_min is not None and mh.pos_max is not None and margin > 0.0:
+        span = pos_max - pos_min
+        if span > 0.0:
+            m = min(margin, 0.25 * span)
+            pos_min += m
+            pos_max -= m
+    return pos_min, pos_max
 
 
 def _best_model(pmax: float, vmax: float, tmax: float) -> Optional[str]:
@@ -307,6 +346,13 @@ class MotorService:
         self._use_socketcan = (
             str(device_type).lower() in ("socketcanfd", "socketcan")
             or str(channel).lower().startswith("can"))
+
+        # SocketCAN auto-recovery: if a canX interface drops to DOWN (laptop
+        # sleep/wake), bring it back up automatically before we open/scan it,
+        # so motors start reading again without manually running reset_can.sh.
+        # Disable with MOTOR_CAN_AUTOUP=0. (Requires passwordless sudo for
+        # `ip link`.)
+        self._can_autoup = os.environ.get("MOTOR_CAN_AUTOUP", "1") != "0"
 
         # Lock protects only the plain shared state below (NOT the SDK handle).
         self.lock = threading.RLock()
@@ -758,9 +804,7 @@ class MotorService:
     def _write_play_setpoint(self, mh: _MotorHandle, pos: float, clip: dict):
         """Drive one motor toward ``pos`` in MIT mode using the clip's recorded
         gains (falling back to safe holding gains). Caller holds self.lock."""
-        pmax = mh.limits[0]
-        pos_min = -pmax if mh.pos_min is None else mh.pos_min
-        pos_max = pmax if mh.pos_max is None else mh.pos_max
+        pos_min, pos_max = _cmd_pos_bounds(mh)
         g = (clip.get("gains") or {}).get(str(mh.motor_id)) or {}
         kp = g.get("kp")
         kd = g.get("kd")
@@ -773,7 +817,7 @@ class MotorService:
         elif float(mh.sp["kp"]) <= 0.0:
             mh.sp["kp"] = CAL_MIT_KP
         if kd is not None and float(kd) > 0.0:
-            mh.sp["kd"] = _clamp(float(kd), 0.0, 5.0)
+            mh.sp["kd"] = _clamp(float(kd), 0.0, KD_MAX_SAFE)
         elif float(mh.sp["kd"]) <= 0.0:
             mh.sp["kd"] = CAL_MIT_KD
 
@@ -900,6 +944,43 @@ class MotorService:
     # ------------------------------------------------------------------ #
     # Device operations (executed on the worker thread)
     # ------------------------------------------------------------------ #
+    def _iface_is_up(self, iface) -> Optional[bool]:
+        """True/False if the SocketCAN iface is UP; None if it doesn't exist."""
+        try:
+            out = subprocess.run(
+                ["ip", "-br", "link", "show", iface],
+                capture_output=True, text=True, timeout=3)
+        except Exception:  # noqa: BLE001
+            return None
+        if out.returncode != 0 or not out.stdout.strip():
+            return None
+        return "UP" in out.stdout.split()
+
+    def _ensure_socketcan_up(self, channel) -> None:
+        """If a canX interface has dropped to DOWN (typically a laptop
+        sleep/wake), bring it straight back up before opening it.
+
+        IMPORTANT: this only runs a plain ``ip link set <iface> up``. We
+        deliberately do NOT down + re-`type can` reconfigure here: doing that
+        live (while the adapter/sockets are active) reliably soft-wedges the
+        gs_usb device so it reads UP but passes no frames. A DOWN-after-sleep
+        interface keeps its bitrate config, so a plain `up` is enough. For a
+        hard wedge or a fresh re-enumeration that needs reconfiguring, use
+        reset_can.sh (which runs with the dashboard stopped). Best-effort and
+        non-fatal; no-op unless the interface exists and is currently DOWN."""
+        if not (self._use_socketcan and self._can_autoup):
+            return
+        iface = str(channel)
+        if not iface.startswith("can"):
+            return
+        if self._iface_is_up(iface) is not False:
+            return  # UP already, or missing entirely (can't fix in software)
+        try:
+            subprocess.run(["sudo", "-n", "ip", "link", "set", iface, "up"],
+                           capture_output=True, timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _open_controller(self, channel) -> Controller:
         """Open the shared bus for ``channel`` using the configured transport.
 
@@ -909,6 +990,7 @@ class MotorService:
         """
         ch = str(channel)
         if self._use_socketcan:
+            self._ensure_socketcan_up(ch)
             return Controller.from_socketcanfd(ch)
         return Controller.from_dm_device(self.device_type, ch)
 
@@ -2260,7 +2342,7 @@ class MotorService:
             mh.sp["kp"] = (blank["kp"] if kp is None
                            else _clamp(float(kp), 0.0, 500.0))
             mh.sp["kd"] = (blank["kd"] if kd is None
-                           else _clamp(float(kd), 0.0, 5.0))
+                           else _clamp(float(kd), 0.0, KD_MAX_SAFE))
             mh.mode = "mit"
             mh._mode_applied = None  # worker re-applies on next tick
             mh.max_power = False
@@ -2270,8 +2352,7 @@ class MotorService:
         mh = self._require(channel, motor_id)
         with self.lock:
             pmax, vmax, tmax = mh.limits
-            pos_min = -pmax if mh.pos_min is None else mh.pos_min
-            pos_max = pmax if mh.pos_max is None else mh.pos_max
+            pos_min, pos_max = _cmd_pos_bounds(mh)
             if "pos" in kw:
                 mh.sp["pos"] = _clamp(float(kw["pos"]), pos_min, pos_max)
             if "vel" in kw:
@@ -2281,7 +2362,7 @@ class MotorService:
             if "kp" in kw:
                 mh.sp["kp"] = _clamp(float(kw["kp"]), 0.0, 500.0)
             if "kd" in kw:
-                mh.sp["kd"] = _clamp(float(kw["kd"]), 0.0, 5.0)
+                mh.sp["kd"] = _clamp(float(kw["kd"]), 0.0, KD_MAX_SAFE)
             if "vlim" in kw:
                 mh.sp["vlim"] = _clamp(float(kw["vlim"]), 0.0, vmax)
             if "ratio" in kw:
@@ -2355,28 +2436,48 @@ class MotorService:
         def KF(move_s, hold_s, *poses):
             return (move_s, hold_s, [p for p in poses if p is not None])
 
+        # OpenArm joint map (per arm): J1 shoulder pan, J2 shoulder lift,
+        # J3 shoulder rotation, J4 elbow flex, J5 wrist roll, J6 wrist pitch,
+        # J7 wrist rotation, J8 gripper. NOTE: on these arms J1/J2 are
+        # calibrated with pos_max=0, so ONLY negative fractions move them
+        # (negative J2 = lift the arm up). Directions here are conservative;
+        # if a joint sweeps the wrong way it's a one-line sign flip below.
         keyframes = []
         if name == "wave":
             a = primary
             keyframes += [
-                KF(0.8, 0.3, P(a, 2, 0.55), P(a, 4, 0.45)),  # raise arm
-                KF(0.35, 0.1, P(a, 6, 0.7)),                 # wrist over
-                KF(0.35, 0.1, P(a, 6, -0.5)),                # and back
-                KF(0.35, 0.1, P(a, 6, 0.7)),
-                KF(0.35, 0.1, P(a, 6, -0.5)),
-                KF(0.35, 0.3, P(a, 6, 0.0)),
+                # Raise the upper arm (J2) and bend the elbow up (J4) so the
+                # forearm/hand comes up to a clear waving pose.
+                KF(1.4, 0.5, P(a, 2, -0.7), P(a, 4, 0.7)),
+                # Wave: sweep the raised forearm side to side at the shoulder
+                # (J1) a few times, staying in the middle of its travel.
+                KF(0.9, 0.12, P(a, 1, -0.30)),
+                KF(0.9, 0.12, P(a, 1, -0.62)),
+                KF(0.9, 0.12, P(a, 1, -0.30)),
+                KF(0.9, 0.12, P(a, 1, -0.62)),
+                KF(1.0, 0.4, P(a, 1, -0.46)),  # settle centered
             ]
         elif name == "clap":
             arms = [c for c in (left, right) if c] or ([primary] if primary else [])
-            keyframes.append(KF(0.6, 0.2, *[P(c, 2, 0.45) for c in arms]))  # raise
+            # Mirror the two arms so they angle inward toward the midline.
+            def _mirror(c):
+                return 1.0 if c == right else -1.0
+            # 1. Raise both arms and bring the forearms together in front
+            #    center: shoulder lift (J2), shoulder rotation inward (J3),
+            #    elbow flex (J4).
+            raise_poses = []
+            for c in arms:
+                raise_poses += [P(c, 2, -0.55),
+                                P(c, 3, 0.45 * _mirror(c)),
+                                P(c, 4, 0.78)]
+            keyframes.append(KF(1.5, 0.4, *raise_poses))
+            # 2. Clap 3 times with a small, gentle elbow tap (hands meet, then
+            #    part slightly) -- no fast base-motor swings.
             for _ in range(3):
-                together, apart = [], []
-                for c in arms:
-                    sign = -1.0 if c == right else 1.0
-                    together.append(P(c, 1, 0.45 * sign))
-                    apart.append(P(c, 1, 0.1 * sign))
-                keyframes.append(KF(0.28, 0.12, *together))
-                keyframes.append(KF(0.30, 0.12, *apart))
+                together = [P(c, 4, 0.95) for c in arms]
+                apart = [P(c, 4, 0.78) for c in arms]
+                keyframes.append(KF(0.5, 0.1, *together))
+                keyframes.append(KF(0.55, 0.15, *apart))
         elif name == "dab":
             r = right or primary
             l = left or next((c for c in chans if c != r), None)

@@ -413,14 +413,14 @@
           </div>
           <div style="flex:0 0 auto">
             <label style="margin:0 0 5px">Damping &middot; Kd</label>
-            <input id="presetKd" type="number" value="4" min="0" max="5" step="0.05" style="width:120px">
+            <input id="presetKd" type="number" value="1" min="0" max="2.5" step="0.05" style="width:120px">
           </div>
           <button id="presetApply" class="btn-accent" style="flex:0 0 auto;width:auto">Apply to All</button>
           <button id="presetSave" class="btn-good" style="flex:0 0 auto;width:auto">Save as Default</button>
           <span id="presetMsg" class="muted" style="flex:0 0 auto"></span>
         </div>
         <p class="muted" style="margin:10px 0 0">New motors start at the saved default
-          (currently <b>Kp <span id="presetCurKp">20</span></b> / <b>Kd <span id="presetCurKd">4</span></b>).</p>
+          (currently <b>Kp <span id="presetCurKp">20</span></b> / <b>Kd <span id="presetCurKd">1</span></b>).</p>
       </div>
     </details>
 
@@ -524,8 +524,8 @@
         </div>
         <div>
           <label>Kd <span class="muted">(damping)</span></label>
-          <input type="range" class="r-kd" min="0" max="5" step="0.05" value="4">
-          <div class="sliderval"><span>0</span><span class="kd-val">4</span><span>5</span></div>
+          <input type="range" class="r-kd" min="0" max="2.5" step="0.05" value="1">
+          <div class="sliderval"><span>0</span><span class="kd-val">1</span><span>2.5</span></div>
         </div>
       </div>
 
@@ -1137,8 +1137,18 @@ function makeCard(u){
   });
   function link(rangeSel,numSel,key,valSel){
     const r=q(rangeSel), n=numSel?q(numSel):null, v=valSel?q(valSel):null;
+    const send=val=>post("/api/target",{channel,motor_id,[key]:val});
+    // Throttle slider sends to ~33 Hz (trailing). Dragging fires "input" dozens
+    // of times per second; flooding the worker thread with commands makes the
+    // motor lurch between big setpoint jumps (visible stutter). Throttling keeps
+    // the setpoint stream smooth and always delivers the final value.
+    let last=0, pend=null, timer=null;
+    const flushPend=()=>{ timer=null; if(pend!==null){ const val=pend; pend=null; last=Date.now(); send(val); } };
     const push=()=>{const val=parseFloat(r.value); if(n)n.value=val; if(v)v.textContent=val;
-      post("/api/target",{channel,motor_id,[key]:val});};
+      const now=Date.now();
+      if(now-last>=30){ last=now; send(val); }
+      else { pend=val; if(!timer) timer=setTimeout(flushPend, 30-(now-last)); }
+    };
     const mark=()=>{ctx.editing=true; clearTimeout(ctx._ed); ctx._ed=setTimeout(()=>ctx.editing=false,1200);};
     r.addEventListener("input",()=>{mark();push();});
     if(n)n.addEventListener("change",()=>{r.value=n.value; mark(); push();});
@@ -1389,10 +1399,15 @@ function updateIndivActions(){
 
 // ---- gains preset (Kp / Kd) ----
 const GAINS_KEY="damiao.gains.default";
-const FACTORY_GAINS={kp:20, kd:4};
+// Kd is capped at KD_MAX: above ~3.5 the 50 Hz impedance loop goes into a
+// self-sustaining buzz/stutter once motion excites it. Default Kd=1 holds well
+// with plenty of stability margin. (Server also enforces this cap.)
+const KD_MAX=2.5;
+const FACTORY_GAINS={kp:20, kd:1};
 function loadGains(){
   try{ const g=JSON.parse(localStorage.getItem(GAINS_KEY));
-    if(g && isFinite(g.kp) && isFinite(g.kd)) return {kp:+g.kp, kd:+g.kd}; }catch(_){}
+    if(g && isFinite(g.kp) && isFinite(g.kd))
+      return {kp:+g.kp, kd:Math.min(Math.max(+g.kd,0), KD_MAX)}; }catch(_){}
   return Object.assign({}, FACTORY_GAINS);
 }
 let defaultGains=loadGains();
@@ -1410,7 +1425,7 @@ function reflectPreset(){
   G("presetCurKp").textContent=defaultGains.kp; G("presetCurKd").textContent=defaultGains.kd;
 }
 function readPresetInputs(){
-  return {kp:Math.max(0, parseFloat(G("presetKp").value)||0), kd:Math.max(0, parseFloat(G("presetKd").value)||0)};
+  return {kp:Math.max(0, parseFloat(G("presetKp").value)||0), kd:Math.min(Math.max(0, parseFloat(G("presetKd").value)||0), KD_MAX)};
 }
 G("presetApply").onclick=()=>{
   const g=readPresetInputs(); applyGainsAll(g);
