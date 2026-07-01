@@ -103,6 +103,18 @@ CAL_MIN_SPAN_RAD = _env_float("CAL_MIN_SPAN_RAD", 0.75)
 CAL_CENTER_TOL_RAD = 0.06
 CAL_MIT_KP = _env_float("CAL_MIT_KP", 10.0)
 CAL_MIT_KD = _env_float("CAL_MIT_KD", 0.45)
+# Auto-calibration records pos_min/pos_max AT the mechanical hard stops (it drives
+# into them to find the range). If we let commands reach those exact angles, the
+# position controller keeps pushing the motor into the stop -> it can't get there,
+# so it stalls and buzzes loudly. Hold commanded targets this far inside each
+# calibrated stop so the controller never fights a hard stop. Only applied to
+# *calibrated* motors; capped so it can never collapse a small range.
+CMD_LIMIT_MARGIN_RAD = _env_float("MOTOR_LIMIT_MARGIN_RAD", 0.08)
+# Cap the commanded derivative gain. High Kd on a light/backlashy joint (e.g. a
+# wrist) turns velocity/encoder noise into a sustained limit-cycle oscillation --
+# the motor buzzes/stutters while merely holding. Empirically kd<=3 is stable, so
+# clamp well under that. Overridable but never above this hard cap.
+KD_MAX_SAFE = _env_float("MOTOR_KD_MAX", 2.5)
 CAL_MIT_TARGET_LEAD_RAD = _env_float("CAL_MIT_TARGET_LEAD_RAD", 0.18)
 CAL_MIT_MAX_KP = _env_float("CAL_MIT_MAX_KP", 22.0)
 CAL_MIT_MAX_TARGET_LEAD_RAD = _env_float("CAL_MIT_MAX_TARGET_LEAD_RAD", 0.40)
@@ -171,6 +183,26 @@ PLAYBACK_APPROACH_S = _env_float("DM_PLAYBACK_APPROACH_S", 1.5)
 
 def _clamp(x, lo, hi):
     return lo if x < lo else hi if x > hi else x
+
+
+def _cmd_pos_bounds(mh, margin: float = CMD_LIMIT_MARGIN_RAD):
+    """Effective [lo, hi] for *commanded* positions of one motor.
+
+    For a calibrated motor the calibrated stops are the mechanical hard stops,
+    so we pull the command bounds in by ``margin`` to keep the controller from
+    driving the motor into a stop (which stalls/buzzes). Uncalibrated motors
+    keep their full physical range. The margin is capped at 25% of the span so
+    a small joint range can never invert or collapse to a point."""
+    pmax = mh.limits[0]
+    pos_min = -pmax if mh.pos_min is None else mh.pos_min
+    pos_max = pmax if mh.pos_max is None else mh.pos_max
+    if mh.pos_min is not None and mh.pos_max is not None and margin > 0.0:
+        span = pos_max - pos_min
+        if span > 0.0:
+            m = min(margin, 0.25 * span)
+            pos_min += m
+            pos_max -= m
+    return pos_min, pos_max
 
 
 def _best_model(pmax: float, vmax: float, tmax: float) -> Optional[str]:
@@ -736,9 +768,7 @@ class MotorService:
     def _write_play_setpoint(self, mh: _MotorHandle, pos: float, clip: dict):
         """Drive one motor toward ``pos`` in MIT mode using the clip's recorded
         gains (falling back to safe holding gains). Caller holds self.lock."""
-        pmax = mh.limits[0]
-        pos_min = -pmax if mh.pos_min is None else mh.pos_min
-        pos_max = pmax if mh.pos_max is None else mh.pos_max
+        pos_min, pos_max = _cmd_pos_bounds(mh)
         g = (clip.get("gains") or {}).get(str(mh.motor_id)) or {}
         kp = g.get("kp")
         kd = g.get("kd")
@@ -751,7 +781,7 @@ class MotorService:
         elif float(mh.sp["kp"]) <= 0.0:
             mh.sp["kp"] = CAL_MIT_KP
         if kd is not None and float(kd) > 0.0:
-            mh.sp["kd"] = _clamp(float(kd), 0.0, 5.0)
+            mh.sp["kd"] = _clamp(float(kd), 0.0, KD_MAX_SAFE)
         elif float(mh.sp["kd"]) <= 0.0:
             mh.sp["kd"] = CAL_MIT_KD
 
@@ -2187,7 +2217,7 @@ class MotorService:
             mh.sp["kp"] = (blank["kp"] if kp is None
                            else _clamp(float(kp), 0.0, 500.0))
             mh.sp["kd"] = (blank["kd"] if kd is None
-                           else _clamp(float(kd), 0.0, 5.0))
+                           else _clamp(float(kd), 0.0, KD_MAX_SAFE))
             mh.mode = "mit"
             mh._mode_applied = None  # worker re-applies on next tick
             mh.max_power = False
@@ -2197,8 +2227,7 @@ class MotorService:
         mh = self._require(channel, motor_id)
         with self.lock:
             pmax, vmax, tmax = mh.limits
-            pos_min = -pmax if mh.pos_min is None else mh.pos_min
-            pos_max = pmax if mh.pos_max is None else mh.pos_max
+            pos_min, pos_max = _cmd_pos_bounds(mh)
             if "pos" in kw:
                 mh.sp["pos"] = _clamp(float(kw["pos"]), pos_min, pos_max)
             if "vel" in kw:
@@ -2208,7 +2237,7 @@ class MotorService:
             if "kp" in kw:
                 mh.sp["kp"] = _clamp(float(kw["kp"]), 0.0, 500.0)
             if "kd" in kw:
-                mh.sp["kd"] = _clamp(float(kw["kd"]), 0.0, 5.0)
+                mh.sp["kd"] = _clamp(float(kw["kd"]), 0.0, KD_MAX_SAFE)
             if "vlim" in kw:
                 mh.sp["vlim"] = _clamp(float(kw["vlim"]), 0.0, vmax)
             if "ratio" in kw:
