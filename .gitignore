@@ -10,3 +10,9 @@ __pycache__/
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# TLS certificates / private keys (generated locally via gen_cert.sh)
+certs/
+*.pem
+*.key
+*.crt
